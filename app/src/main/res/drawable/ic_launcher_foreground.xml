@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Inactive vertical fader slots -->
+    <path
+        android:strokeColor="#3F3F46"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M35,30L35,78M54,30L54,78M73,30L73,78" />
+    <!-- Active white fader fills -->
+    <path
+        android:strokeColor="#FAFAFA"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M35,42L35,78M54,56L54,78M73,35L73,78" />
+    <!-- Studio fader caps -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,39h14v6h-14zM47,53h14v6h-14zM66,32h14v6h-14z" />
+    <!-- Center hairline markers inside caps -->
+    <path
+        android:strokeColor="#0D0D0F"
+        android:strokeWidth="1.2"
+        android:pathData="M30,42L40,42M49,56L59,56M68,35L78,35" />
+</vector>
