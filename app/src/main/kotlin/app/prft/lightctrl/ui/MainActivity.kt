@@ -4,28 +4,48 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.prft.lightctrl.BuildConfig
+import app.prft.lightctrl.domain.StudioPreferencesStore
 import app.prft.lightctrl.ui.dashboard.StudioDashboardScreen
 import app.prft.lightctrl.ui.dashboard.StudioViewModel
 import app.prft.lightctrl.ui.theme.PrftStudioTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    @Inject
+    lateinit var preferencesStore: StudioPreferencesStore
+
+    private val viewModel: StudioViewModel by viewModels()
+
+    private val volumeKeyEventHandler by lazy {
+        VolumeKeyEventHandler(
+            isEnabledProvider = { preferencesStore.isVolumeKeyTestFlashEnabled.value },
+            onTriggerFlash = {
+                if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                    viewModel.triggerMasterTestFlash()
+                }
+            },
+        )
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -36,8 +56,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             PrftStudioTheme {
-                val vm: StudioViewModel = hiltViewModel()
-                val dashboardState by vm.state.collectAsStateWithLifecycle()
+                val dashboardState by viewModel.state.collectAsStateWithLifecycle()
 
                 var hasPermissions by remember { mutableStateOf(hasRequiredBlePermissions()) }
 
@@ -45,19 +64,19 @@ class MainActivity : ComponentActivity() {
                     contract = ActivityResultContracts.RequestMultiplePermissions()
                 ) {
                     hasPermissions = hasRequiredBlePermissions()
-                    vm.refreshBluetooth()
+                    viewModel.refreshBluetooth()
                     if (hasPermissions) {
-                        vm.startScan()
+                        viewModel.startScan()
                     }
                 }
 
                 LaunchedEffect(hasPermissions) {
                     if (!BuildConfig.DEBUG) {
-                        vm.setBenchSimulator(false)
+                        viewModel.setBenchSimulator(false)
                     }
-                    vm.refreshBluetooth()
+                    viewModel.refreshBluetooth()
                     if (hasPermissions) {
-                        vm.startScan()
+                        viewModel.startScan()
                     }
                 }
 
@@ -68,10 +87,30 @@ class MainActivity : ComponentActivity() {
                     onRequestBlePermissions = {
                         permissionLauncher.launch(requiredPermissionsArray())
                     },
-                    viewModel = vm,
+                    viewModel = viewModel,
                 )
             }
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            return super.onKeyDown(keyCode, event)
+        }
+        if (volumeKeyEventHandler.onKeyDown(keyCode, event?.repeatCount ?: 0)) {
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            return super.onKeyUp(keyCode, event)
+        }
+        if (volumeKeyEventHandler.onKeyUp(keyCode)) {
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
     }
 
     private fun hasRequiredBlePermissions(): Boolean {

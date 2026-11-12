@@ -9,6 +9,7 @@ import app.prft.lightctrl.ble.ProfotoBleConnectionFsm
 import app.prft.lightctrl.ble.ProfotoBleForegroundService
 import app.prft.lightctrl.ble.ProfotoGattProfile
 import app.prft.lightctrl.ble.mock.VirtualBenchFixtures
+import app.prft.lightctrl.protocol.AfAssistMode
 import app.prft.lightctrl.protocol.AirGroup
 import app.prft.lightctrl.protocol.AirProtocolMode
 import app.prft.lightctrl.protocol.BatteryChemistry
@@ -18,10 +19,14 @@ import app.prft.lightctrl.protocol.DisplayOrientationMode
 import app.prft.lightctrl.protocol.FlashMode
 import app.prft.lightctrl.protocol.FlashSchedulingState
 import app.prft.lightctrl.protocol.HardwareCatalog
+import app.prft.lightctrl.protocol.MonolightZoomMode
 import app.prft.lightctrl.protocol.PupDecodedMessage
 import app.prft.lightctrl.protocol.PupFrameCodec
 import app.prft.lightctrl.protocol.PupOpcodes
+import app.prft.lightctrl.protocol.ReadySignalMode
 import app.prft.lightctrl.protocol.RemoteOperatingMode
+import app.prft.lightctrl.protocol.RfPowerLevel
+import app.prft.lightctrl.protocol.SyncTriggerMode
 import app.prft.lightctrl.protocol.VideoLightPowerMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
@@ -31,6 +36,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +46,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.roundToInt
@@ -52,14 +59,24 @@ import kotlin.math.roundToInt
 class StudioOrchestrator(
     private val appContext: Context?,
     private val bleGateway: BleAdapterGateway,
+    private val preferencesStore: StudioPreferencesStore = StudioPreferencesStore(appContext, Dispatchers.IO),
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val groupPacingMs: Long = ProfotoGattProfile.GROUP_INTER_DEVICE_PACING_MS,
+    private val allowSimulator: Boolean = true,
 ) {
     @Inject
     constructor(
         @ApplicationContext appContext: Context,
         bleGateway: BleAdapterGateway,
-    ) : this(appContext, bleGateway, Dispatchers.Default, ProfotoGattProfile.GROUP_INTER_DEVICE_PACING_MS)
+        preferencesStore: StudioPreferencesStore,
+    ) : this(
+        appContext = appContext,
+        bleGateway = bleGateway,
+        preferencesStore = preferencesStore,
+        dispatcher = Dispatchers.Default,
+        groupPacingMs = ProfotoGattProfile.GROUP_INTER_DEVICE_PACING_MS,
+        allowSimulator = BuildConfig.DEBUG,
+    )
 
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val nicknameStore = DeviceNicknameStore(appContext, dispatcher)
@@ -72,6 +89,9 @@ class StudioOrchestrator(
     private val statusBanner = MutableStateFlow<String?>(null)
     private val connectFallbackGroupLevels = MutableStateFlow(listOf(80, 75, 70, 65, 60, 55))
     private val groupWriteJobs = arrayOfNulls<Job>(6)
+    private val manuallyDisconnectedMacs = mutableSetOf<String>()
+    private val autoConnectingMacs = mutableSetOf<String>()
+    private val userDirectedGroupPowers = ConcurrentHashMap<String, MutableMap<Int, Int>>()
 
     private val studioGroups = listOf(
         AirGroup.GROUP_A,
@@ -88,12 +108,21 @@ class StudioOrchestrator(
         val telemetryJob: Job,
     )
 
+    private data class PrefsSnapshot(
+        val groupRoles: Map<AirGroup, String>,
+        val pinnedKitMacs: Set<String>,
+        val isVolumeKeyTestFlashEnabled: Boolean,
+        val isAutoReconnectPinnedEnabled: Boolean,
+        val isDualPowerReadoutEnabled: Boolean,
+    )
+
     private data class AuxUiState(
         val sim: Boolean,
         val grp: AirGroup,
         val banner: String?,
         val fallbackLevels: List<Int>,
         val nicknames: Map<String, String>,
+        val prefs: PrefsSnapshot,
     )
 
     init {
@@ -108,6 +137,49 @@ class StudioOrchestrator(
                 }
             }
         }
+
+        scope.launch {
+            combine(
+                bleGateway.scannedDevices,
+                preferencesStore.pinnedKitMacs,
+                preferencesStore.isAutoReconnectPinnedEnabled,
+            ) { scanned, pinned, autoReconnect ->
+                Triple(scanned, pinned, autoReconnect)
+            }.collect { (scanned, pinned, autoReconnect) ->
+                if (autoReconnect && pinned.isNotEmpty()) {
+                    for (dev in scanned) {
+                        val norm = DeviceNicknameStore.normalizeAddress(dev.address)
+                        if (norm in pinned && norm !in manuallyDisconnectedMacs) {
+                            val existing = sessions[dev.address]
+                            val stage = unitsState.value[dev.address]?.stage
+                            val isDisconnected = existing == null ||
+                                existing.fsm.stage.value is BleConnectionStage.Disconnected ||
+                                existing.fsm.stage.value is BleConnectionStage.Failed
+                            if (isDisconnected && stage !is BleConnectionStage.Connecting && norm !in autoConnectingMacs) {
+                                autoConnectingMacs.add(norm)
+                                scope.launch {
+                                    try {
+                                        connectDevice(dev)
+                                    } finally {
+                                        autoConnectingMacs.remove(norm)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private val prefsSnapshotFlow: Flow<PrefsSnapshot> = combine(
+        preferencesStore.groupRoles,
+        preferencesStore.pinnedKitMacs,
+        preferencesStore.isVolumeKeyTestFlashEnabled,
+        preferencesStore.isAutoReconnectPinnedEnabled,
+        preferencesStore.isDualPowerReadoutEnabled,
+    ) { roles, pinned, volume, autoRec, dualPower ->
+        PrefsSnapshot(roles, pinned, volume, autoRec, dualPower)
     }
 
     val dashboardState: StateFlow<StudioDashboardState> = combine(
@@ -120,9 +192,9 @@ class StudioOrchestrator(
             selectedGroupFilter,
             statusBanner,
             connectFallbackGroupLevels,
-            nicknameStore.nicknames,
-        ) { sim, grp, banner, levels, nicks ->
-            AuxUiState(sim, grp, banner, levels, nicks)
+            combine(nicknameStore.nicknames, prefsSnapshotFlow) { nicks, p -> Pair(nicks, p) },
+        ) { sim, grp, banner, levels, (nicks, p) ->
+            AuxUiState(sim, grp, banner, levels, nicks, p)
         },
     ) { btEnabled, scanning, scanned, unitsMap, aux ->
         val units = recomputeChannelCoexistence(
@@ -137,9 +209,14 @@ class StudioOrchestrator(
             isScanning = scanning,
             benchSimulatorEnabled = aux.sim,
             deviceNicknames = aux.nicknames,
+            groupRoles = aux.prefs.groupRoles,
+            pinnedKitMacs = aux.prefs.pinnedKitMacs,
+            isVolumeKeyTestFlashEnabled = aux.prefs.isVolumeKeyTestFlashEnabled,
+            isAutoReconnectPinnedEnabled = aux.prefs.isAutoReconnectPinnedEnabled,
+            isDualPowerReadoutEnabled = aux.prefs.isDualPowerReadoutEnabled,
             scannedDevices = scanned,
             connectedUnits = units,
-            groupChannels = buildGroupChannelStates(units, aux.fallbackLevels),
+            groupChannels = buildGroupChannelStates(units, aux.fallbackLevels, aux.prefs.groupRoles),
             selectedGroupFilter = aux.grp,
             statusBanner = aux.banner,
         )
@@ -157,6 +234,7 @@ class StudioOrchestrator(
     }
 
     fun startScan() {
+        manuallyDisconnectedMacs.clear()
         statusBanner.value = null
         bleGateway.startScan()
     }
@@ -178,6 +256,10 @@ class StudioOrchestrator(
      * Never auto-enabled at startup and never skips the 10-stage GATT handshake.
      */
     fun setBenchSimulatorEnabled(enabled: Boolean) {
+        if (enabled && !allowSimulator) {
+            statusBanner.value = "Bench Simulator is disabled in release builds"
+            return
+        }
         simulatorEnabled.value = enabled
         val androidGw = bleGateway as? AndroidBleAdapterGateway
         if (enabled) {
@@ -197,12 +279,15 @@ class StudioOrchestrator(
 
     fun connectDevice(device: DiscoveredProfotoDevice, fastSimTimings: Boolean = false) {
         val existing = sessions[device.address]
-        if (existing != null && existing.fsm.stage.value !is BleConnectionStage.Failed) return
+        if (existing != null && existing.fsm.stage.value !is BleConnectionStage.Failed && existing.fsm.stage.value !is BleConnectionStage.Disconnected) {
+            return
+        }
         if (existing != null) {
             existing.stageJob.cancel()
             existing.telemetryJob.cancel()
             sessions.remove(device.address)
         }
+        userDirectedGroupPowers.remove(device.address)
         statusBanner.value = null
 
         val peerLink = if (device.isSimulated) {
@@ -284,6 +369,8 @@ class StudioOrchestrator(
     }
 
     fun disconnectDevice(address: String) {
+        manuallyDisconnectedMacs.add(DeviceNicknameStore.normalizeAddress(address))
+        userDirectedGroupPowers.remove(address)
         val active = sessions.remove(address)
         scope.launch {
             active?.stageJob?.cancel()
@@ -485,7 +572,9 @@ class StudioOrchestrator(
     // Air Channel & Group
     fun setAirChannel(address: String, channel: Int) {
         val unit = unitsState.value[address] ?: return
-        val clamped = channel.coerceIn(unit.minAirChannel, unit.maxAirChannel)
+        val safeMin = unit.minAirChannel.coerceIn(1, 100)
+        val safeMax = unit.maxAirChannel.coerceIn(safeMin, 100)
+        val clamped = channel.coerceIn(safeMin, safeMax)
         mutateOptimistically(address) { it.copy(airChannel = clamped) }
         dispatchCommand(address, PupOpcodes.AIR_CHANNEL) { seq ->
             PupFrameCodec.encodeAirChannel(seq, clamped)
@@ -531,41 +620,98 @@ class StudioOrchestrator(
     }
 
     fun setRemoteFlashMode(address: String, mode: FlashMode) {
-        mutateOptimistically(address) { it.copy(flashMode = mode) }
+        val unit = unitsState.value[address] ?: return
+        if (unit.archetype == DeviceArchetype.CONNECT_REMOTE) {
+            statusBanner.value = "Connect operating mode is physically controlled via collar switch"
+            return
+        }
+        val isTtl = (mode == FlashMode.TTL)
+        mutateOptimistically(address) {
+            it.copy(
+                flashMode = mode,
+                ttlAutoEnabled = isTtl,
+                remoteMode = if (isTtl) RemoteOperatingMode.AUTO_TTL else RemoteOperatingMode.MANUAL,
+            )
+        }
         dispatchCommand(address, PupOpcodes.FLASH_MODE) { seq ->
             PupFrameCodec.encodeFlashMode(seq, mode)
         }
     }
 
     fun setConnectOperatingMode(address: String, mode: RemoteOperatingMode) {
+        val unit = unitsState.value[address] ?: return
+        if (unit.archetype == DeviceArchetype.CONNECT_REMOTE) {
+            statusBanner.value = "Connect operating mode is physically controlled via collar switch"
+            return
+        }
         val isTtl = (mode == RemoteOperatingMode.AUTO_TTL)
-        mutateOptimistically(address) { it.copy(remoteMode = mode, ttlAutoEnabled = isTtl) }
+        mutateOptimistically(address) {
+            it.copy(
+                remoteMode = mode,
+                ttlAutoEnabled = isTtl,
+                flashMode = if (isTtl) FlashMode.TTL else FlashMode.MANUAL,
+            )
+        }
         dispatchCommand(address, PupOpcodes.REMOTE_MODE) { seq ->
             PupFrameCodec.encodeRemoteMode(seq, mode)
         }
     }
 
-    fun setTtlEvCompensation(address: String, tenthStops: Int) {
+    fun setGroupTtlEvBias(address: String, group: AirGroup, tenthStops: Int) {
+        if (group !in setOf(AirGroup.GROUP_A, AirGroup.GROUP_B, AirGroup.GROUP_C, AirGroup.ALL)) {
+            statusBanner.value = "TTL EV bias only supported on Groups A..C and ALL"
+            return
+        }
         val clamped = tenthStops.coerceIn(-20, 20)
-        mutateOptimistically(address) { it.copy(ttlEvCompTenthStops = clamped) }
+        mutateOptimistically(address) { cur ->
+            val updatedMap = when (group) {
+                AirGroup.ALL -> cur.groupTtlBiasesTenthStops + (AirGroup.ALL to clamped) + (AirGroup.GROUP_A to clamped)
+                AirGroup.GROUP_A -> cur.groupTtlBiasesTenthStops + (AirGroup.GROUP_A to clamped) + (AirGroup.ALL to clamped)
+                else -> cur.groupTtlBiasesTenthStops + (group to clamped)
+            }
+            val master = if (group == AirGroup.ALL || group == AirGroup.GROUP_A) clamped else cur.ttlEvCompTenthStops
+            cur.copy(groupTtlBiasesTenthStops = updatedMap, ttlEvCompTenthStops = master)
+        }
         val session = sessions[address] ?: return
         scope.launch {
-            val ok = session.fsm.sendCommand(PupOpcodes.AIR_PX_BIAS) { seq ->
-                PupFrameCodec.encodeAirPxBias(seq, clamped, AirGroup.ALL)
-            } || session.fsm.sendCommand(PupOpcodes.AIR_TTL_EV_COMP) { seq ->
-                PupFrameCodec.encodeAirTtlEvComp(seq, clamped)
+            val okBias = session.fsm.sendCommand(PupOpcodes.AIR_PX_BIAS) { seq ->
+                PupFrameCodec.encodeAirPxBias(seq, clamped, group)
             }
-            if (!ok) {
+            val okComp = if (group == AirGroup.ALL) {
+                session.fsm.sendCommand(PupOpcodes.AIR_TTL_EV_COMP) { seq ->
+                    PupFrameCodec.encodeAirTtlEvComp(seq, clamped)
+                }
+            } else {
+                true
+            }
+            val ok = okBias && okComp
+            if (ok) {
+                mutateOptimistically(address) { cur ->
+                    val updatedMap = when (group) {
+                        AirGroup.ALL -> cur.groupTtlBiasesTenthStops + (AirGroup.ALL to clamped) + (AirGroup.GROUP_A to clamped)
+                        AirGroup.GROUP_A -> cur.groupTtlBiasesTenthStops + (AirGroup.GROUP_A to clamped) + (AirGroup.ALL to clamped)
+                        else -> cur.groupTtlBiasesTenthStops + (group to clamped)
+                    }
+                    val master = if (group == AirGroup.ALL || group == AirGroup.GROUP_A) clamped else cur.ttlEvCompTenthStops
+                    cur.copy(groupTtlBiasesTenthStops = updatedMap, ttlEvCompTenthStops = master)
+                }
+            } else {
                 statusBanner.value = "BLE command timeout (TTL EV bias) — verify remote is in range"
             }
         }
     }
 
+    fun setTtlEvCompensation(address: String, tenthStops: Int) {
+        setGroupTtlEvBias(address, AirGroup.ALL, tenthStops)
+    }
+
     fun setConnectProGroupPower(address: String, groupIndex: Int, tenthStops: Int) {
         val unit = unitsState.value[address] ?: return
         if (groupIndex !in 0..5) return
+        val clamped = tenthStops.coerceIn(1, 100)
         val updated = unit.groupPowersTenthStops.toMutableList()
-        updated[groupIndex] = tenthStops.coerceIn(10, 100)
+        updated[groupIndex] = clamped
+        userDirectedGroupPowers.getOrPut(address) { ConcurrentHashMap() }[groupIndex] = clamped
         mutateOptimistically(address) { it.copy(groupPowersTenthStops = updated) }
         dispatchCommand(address, PupOpcodes.AIR_ABSOLUTE_GROUP_ENERGY) { seq ->
             PupFrameCodec.encodeAirAbsoluteGroupEnergy(seq, updated)
@@ -618,9 +764,11 @@ class StudioOrchestrator(
             }
         } else {
             if (group == AirGroup.ALL) {
-                val clampedDelta = clampGroupDelta(unit.groupPowersTenthStops, 10, 100, deltaTenthStops)
+                val clampedDelta = clampGroupDelta(unit.groupPowersTenthStops, 1, 100, deltaTenthStops)
                 if (clampedDelta == 0) return
-                val updated = unit.groupPowersTenthStops.map { (it + clampedDelta).coerceIn(10, 100) }
+                val updated = unit.groupPowersTenthStops.map { (it + clampedDelta).coerceIn(1, 100) }
+                val map = userDirectedGroupPowers.getOrPut(address) { ConcurrentHashMap() }
+                updated.forEachIndexed { idx, p -> map[idx] = p }
                 mutateOptimistically(address) { it.copy(groupPowersTenthStops = updated) }
             }
             dispatchCommand(address, PupOpcodes.AIR_ADJUST_ENERGY) { seq ->
@@ -633,6 +781,219 @@ class StudioOrchestrator(
         mutateOptimistically(address) { it.copy(batteryChemistry = chemistry) }
         dispatchCommand(address, PupOpcodes.BATTERY_TYPE) { seq ->
             PupFrameCodec.encodeBatteryChemistry(seq, chemistry)
+        }
+    }
+
+    fun setRemoteSyncMode(address: String, mode: SyncTriggerMode) {
+        mutateOptimistically(address) { it.copy(syncMode = mode) }
+        dispatchCommand(address, PupOpcodes.SYNC_MODE) { seq ->
+            PupFrameCodec.encodeSyncMode(seq, mode)
+        }
+    }
+
+    fun setRemoteAfAssist(address: String, mode: AfAssistMode) {
+        mutateOptimistically(address) { it.copy(afAssistMode = mode) }
+        dispatchCommand(address, PupOpcodes.AF_ASSIST_MODE) { seq ->
+            PupFrameCodec.encodeAfAssistMode(seq, mode)
+        }
+    }
+
+    fun setRemoteRfPower(address: String, level: RfPowerLevel) {
+        mutateOptimistically(address) { it.copy(rfPowerLevel = level) }
+        dispatchCommand(address, PupOpcodes.RMI_RF_POWER) { seq ->
+            PupFrameCodec.encodeRfPower(seq, level)
+        }
+    }
+
+    fun setRemoteSleepTimeout(address: String, minutes: Int) {
+        val clamped = minutes.coerceIn(0, 255)
+        mutateOptimistically(address) { it.copy(autoOffMinutes = clamped) }
+        val session = sessions[address] ?: return
+        scope.launch {
+            val ok = session.fsm.sendCommand(PupOpcodes.AUTO_OFF_TIMEOUT) { seq ->
+                PupFrameCodec.encodeAutoOffTimeout(seq, clamped)
+            } || session.fsm.sendCommand(PupOpcodes.AUTO_STANDBY_TIMEOUT) { seq ->
+                PupFrameCodec.encodeAutoStandbyTimeout(seq, clamped)
+            }
+            if (!ok) statusBanner.value = "BLE command timeout (sleep timeout)"
+        }
+    }
+
+    fun setRemoteBrightness(address: String, brightness: Int) {
+        val clamped = brightness.coerceIn(0, 3)
+        val level = DisplayBrightnessLevel.fromCode(clamped)
+        mutateOptimistically(address) { it.copy(displayBrightness = level) }
+        dispatchCommand(address, PupOpcodes.DISPLAY_BRIGHTNESS) { seq ->
+            PupFrameCodec.encodeDisplayBrightness(seq, clamped)
+        }
+    }
+
+    fun setRemoteBatteryType(address: String, batteryType: Int) {
+        val chem = BatteryChemistry.fromCode(batteryType)
+        mutateOptimistically(address) { it.copy(batteryChemistry = chem) }
+        dispatchCommand(address, PupOpcodes.BATTERY_TYPE) { seq ->
+            PupFrameCodec.encodeBatteryType(seq, batteryType)
+        }
+    }
+
+    fun setRemoteSounds(address: String, enabled: Boolean) {
+        mutateOptimistically(address) { it.copy(controlSoundsEnabled = enabled) }
+        dispatchCommand(address, PupOpcodes.CONTROL_SOUNDS_ENABLE) { seq ->
+            PupFrameCodec.encodeControlSounds(seq, enabled)
+        }
+    }
+
+    fun setMonolightZoom(address: String, mode: MonolightZoomMode, position: Int? = null) {
+        mutateOptimistically(address) {
+            it.copy(zoomMode = mode, zoomValue = position ?: it.zoomValue)
+        }
+        val session = sessions[address] ?: return
+        scope.launch {
+            val ok = session.fsm.sendCommand(PupOpcodes.ZOOM_MODE) { seq ->
+                PupFrameCodec.encodeZoomMode(seq, mode)
+            }
+            if (ok && position != null) {
+                session.fsm.sendCommand(PupOpcodes.ZOOM_VALUE) { seq ->
+                    PupFrameCodec.encodeZoomValue(seq, position)
+                }
+            }
+            if (!ok) {
+                statusBanner.value = "BLE command timeout (zoom)"
+            }
+        }
+    }
+
+    fun setReadySignalMode(address: String, mode: ReadySignalMode) {
+        val soundOn = (mode == ReadySignalMode.SOUND || mode == ReadySignalMode.SOUND_AND_DIM)
+        val dimOn = (mode == ReadySignalMode.DIM || mode == ReadySignalMode.SOUND_AND_DIM)
+        mutateOptimistically(address) {
+            it.copy(
+                readySignalMode = mode,
+                readySoundEnabled = soundOn,
+                dimDuringRecharge = dimOn,
+            )
+        }
+        val session = sessions[address] ?: return
+        scope.launch {
+            val ok = session.fsm.sendCommand(PupOpcodes.READY_SIGNAL_MODE) { seq ->
+                PupFrameCodec.encodeReadySignalMode(seq, mode)
+            } || run {
+                session.fsm.sendCommand(PupOpcodes.SOUND_ENABLE_READY) { seq ->
+                    PupFrameCodec.encodeReadySound(seq, soundOn)
+                }
+                session.fsm.sendCommand(PupOpcodes.DIM_DURING_RECHARGE) { seq ->
+                    PupFrameCodec.encodeDimDuringRecharge(seq, dimOn)
+                }
+            }
+            if (!ok) {
+                statusBanner.value = "BLE command timeout (ready signal)"
+            }
+        }
+    }
+
+    // Studio Preferences & Master Triggers
+    fun setGroupRole(group: AirGroup, role: String?) {
+        scope.launch { preferencesStore.setGroupRole(group, role) }
+    }
+
+    fun setDevicePinned(address: String, pinned: Boolean) {
+        scope.launch { preferencesStore.setDevicePinned(address, pinned) }
+    }
+
+    fun setVolumeKeyTestFlashEnabled(enabled: Boolean) {
+        scope.launch { preferencesStore.setVolumeKeyTestFlashEnabled(enabled) }
+    }
+
+    fun setAutoReconnectPinnedEnabled(enabled: Boolean) {
+        scope.launch { preferencesStore.setAutoReconnectPinnedEnabled(enabled) }
+    }
+
+    fun setDualPowerReadoutEnabled(enabled: Boolean) {
+        scope.launch { preferencesStore.setDualPowerReadoutEnabled(enabled) }
+    }
+
+    val savedScenes: StateFlow<List<StudioScene>> = preferencesStore.savedScenes
+
+    fun saveScene(scene: StudioScene) {
+        scope.launch { preferencesStore.saveScene(scene) }
+    }
+
+    fun deleteScene(sceneId: String) {
+        scope.launch { preferencesStore.deleteScene(sceneId) }
+    }
+
+    fun importScenes(scenes: List<StudioScene>) {
+        scope.launch { preferencesStore.importScenes(scenes) }
+    }
+
+    fun triggerMasterTestFlash() {
+        triggerStudioMasterTestFlash()
+    }
+
+    fun applyScene(scene: StudioScene) {
+        scope.launch {
+            if (scene.remoteChannel != null) {
+                unitsState.value.values.filter { it.isReady }.forEach { unit ->
+                    setAirChannel(unit.address, scene.remoteChannel)
+                }
+            }
+            if (scene.remoteOperatingMode != null) {
+                unitsState.value.values.filter {
+                    it.isReady && it.archetype == DeviceArchetype.CONNECT_PRO_REMOTE
+                }.forEach { remote ->
+                    setConnectOperatingMode(remote.address, scene.remoteOperatingMode)
+                }
+            }
+            if (scene.syncTriggerMode != null) {
+                unitsState.value.values.filter {
+                    it.isReady && (it.archetype == DeviceArchetype.CONNECT_PRO_REMOTE || it.archetype == DeviceArchetype.CONNECT_REMOTE)
+                }.forEach { remote ->
+                    setRemoteSyncMode(remote.address, scene.syncTriggerMode)
+                }
+            }
+            if (scene.afAssistMode != null) {
+                unitsState.value.values.filter {
+                    it.isReady && (it.archetype == DeviceArchetype.CONNECT_PRO_REMOTE || it.archetype == DeviceArchetype.CONNECT_REMOTE)
+                }.forEach { remote ->
+                    setRemoteAfAssist(remote.address, scene.afAssistMode)
+                }
+            }
+            if (scene.rfPowerLevel != null) {
+                unitsState.value.values.filter {
+                    it.isReady && (it.archetype == DeviceArchetype.CONNECT_PRO_REMOTE || it.archetype == DeviceArchetype.CONNECT_REMOTE)
+                }.forEach { remote ->
+                    setRemoteRfPower(remote.address, scene.rfPowerLevel)
+                }
+            }
+            if (scene.readySignalMode != null) {
+                unitsState.value.values.filter {
+                    it.isReady && (it.archetype == DeviceArchetype.MONOLIGHT || it.archetype == DeviceArchetype.COMPACT_FLASH)
+                }.forEach { strobe ->
+                    setReadySignalMode(strobe.address, scene.readySignalMode)
+                }
+            }
+            for (preset in scene.groupPresets) {
+                setStudioGroupPowerTenthStops(preset.group, preset.powerTenthStops)
+                if (preset.roleLabel != null) {
+                    setGroupRole(preset.group, preset.roleLabel)
+                }
+                val idx = studioGroups.indexOf(preset.group)
+                if (idx in 0..5) {
+                    val allReady = recomputeChannelCoexistence(unitsState.value.values.toList()).filter { it.isReady }
+                    allReady.filter { it.archetype == DeviceArchetype.CONNECT_PRO_REMOTE }.forEach { remote ->
+                        setRemoteGroupEnabled(remote.address, idx, preset.isEnabled)
+                        setRemoteGroupModeling(remote.address, idx, preset.isModelingEnabled)
+                        if (preset.ttlEvBiasTenthStops != null && preset.group in setOf(AirGroup.GROUP_A, AirGroup.GROUP_B, AirGroup.GROUP_C)) {
+                            setGroupTtlEvBias(remote.address, preset.group, preset.ttlEvBiasTenthStops)
+                        }
+                    }
+                    allReady.filter { it.archetype == DeviceArchetype.MONOLIGHT && it.airGroup == preset.group }.forEach { strobe ->
+                        setHeadEnabled(strobe.address, preset.isEnabled)
+                        setVideoLightEnabled(strobe.address, preset.isModelingEnabled)
+                    }
+                }
+            }
+            statusBanner.value = "Applied preset: ${scene.name}"
         }
     }
 
@@ -692,7 +1053,7 @@ class StudioOrchestrator(
     fun setStudioGroupPowerTenthStops(group: AirGroup, tenthStops: Int) {
         val idx = studioGroups.indexOf(group)
         if (idx !in 0..5) return
-        val clamped = tenthStops.coerceIn(10, 100)
+        val clamped = tenthStops.coerceIn(1, 100)
 
         val prevFallback = connectFallbackGroupLevels.value.getOrElse(idx) { 70 }
         val delta = clamped - prevFallback
@@ -715,6 +1076,7 @@ class StudioOrchestrator(
             val updated = remote.groupPowersTenthStops.toMutableList().also {
                 it[idx] = clamped
             }
+            userDirectedGroupPowers.getOrPut(remote.address) { ConcurrentHashMap() }[idx] = clamped
             mutateOptimistically(remote.address) { it.copy(groupPowersTenthStops = updated) }
         }
         standaloneStrobes.forEach { strobe ->
@@ -851,6 +1213,7 @@ class StudioOrchestrator(
     private fun buildGroupChannelStates(
         units: List<ConnectedProfotoUnit>,
         fallbackLevels: List<Int>,
+        roles: Map<AirGroup, String> = emptyMap(),
     ): List<StudioGroupChannelState> {
         val ready = units.filter { it.isReady }
         val connectPro = ready.firstOrNull {
@@ -887,6 +1250,8 @@ class StudioOrchestrator(
             val isModelingEnabled = heads.any { it.videoLightEnabled } ||
                 (activeRemote != null && (activeRemote.airModelLightMask and (1 shl idx)) != 0)
 
+            val ttlBias = connectPro?.groupTtlBiasesTenthStops?.get(grp) ?: 0
+
             StudioGroupChannelState(
                 group = grp,
                 groupIndex = idx,
@@ -897,6 +1262,8 @@ class StudioOrchestrator(
                 memberCount = memberCount,
                 directStrobeCount = heads.size,
                 memberNames = heads.map { it.displayTitle },
+                roleLabel = roles[grp],
+                ttlBiasTenthStops = ttlBias,
             )
         }
     }
@@ -956,8 +1323,26 @@ class StudioOrchestrator(
                 is PupDecodedMessage.FreezeState -> cur.copy(freezeEnabled = msg.enabled)
                 is PupDecodedMessage.CaptureModeState -> cur.copy(captureVideoPriority = msg.isVideoPriority)
                 is PupDecodedMessage.IrSlaveState -> cur.copy(irSlaveEnabled = msg.enabled)
-                is PupDecodedMessage.ReadySoundState -> cur.copy(readySoundEnabled = msg.enabled)
-                is PupDecodedMessage.DimDuringRecharge -> cur.copy(dimDuringRecharge = msg.enabled)
+                is PupDecodedMessage.ReadySoundState -> {
+                    val dim = cur.dimDuringRecharge
+                    val mode = when {
+                        msg.enabled && dim -> ReadySignalMode.SOUND_AND_DIM
+                        msg.enabled -> ReadySignalMode.SOUND
+                        dim -> ReadySignalMode.DIM
+                        else -> ReadySignalMode.OFF
+                    }
+                    cur.copy(readySoundEnabled = msg.enabled, readySignalMode = mode)
+                }
+                is PupDecodedMessage.DimDuringRecharge -> {
+                    val sound = cur.readySoundEnabled
+                    val mode = when {
+                        sound && msg.enabled -> ReadySignalMode.SOUND_AND_DIM
+                        sound -> ReadySignalMode.SOUND
+                        msg.enabled -> ReadySignalMode.DIM
+                        else -> ReadySignalMode.OFF
+                    }
+                    cur.copy(dimDuringRecharge = msg.enabled, readySignalMode = mode)
+                }
                 is PupDecodedMessage.VideoLightState -> cur.copy(videoLightEnabled = msg.enabled)
                 is PupDecodedMessage.VideoLightStateV2 -> cur.copy(videoLightEnabled = msg.enabled)
                 is PupDecodedMessage.VideoLightMode -> cur.copy(videoLightMode = msg.mode)
@@ -986,29 +1371,85 @@ class StudioOrchestrator(
                     primaryHeadId = msg.headId,
                     airGroup = msg.group,
                 )
-                is PupDecodedMessage.AirChannelAssignment -> cur.copy(airChannel = msg.channel)
-                is PupDecodedMessage.AirChannelBounds -> cur.copy(
-                    minAirChannel = msg.minChannel,
-                    maxAirChannel = msg.maxChannel,
+                is PupDecodedMessage.AirChannelAssignment -> cur.copy(
+                    airChannel = msg.channel.coerceIn(cur.minAirChannel, cur.maxAirChannel.coerceAtLeast(cur.minAirChannel)),
                 )
-                is PupDecodedMessage.AirProtocol -> cur.copy(airProtocolMode = msg.mode)
-                is PupDecodedMessage.StrobeFlashMode -> cur.copy(flashMode = msg.mode)
-                is PupDecodedMessage.RemoteModeState -> cur.copy(
-                    remoteMode = msg.mode,
-                    flashMode = if (msg.mode == RemoteOperatingMode.AUTO_TTL) FlashMode.TTL else FlashMode.MANUAL,
-                )
-                is PupDecodedMessage.TtlAutoState -> cur.copy(ttlAutoEnabled = msg.enabled)
-                is PupDecodedMessage.AirGroupTtlBias -> {
-                    if (msg.group == AirGroup.ALL || msg.group == AirGroup.GROUP_A) {
-                        cur.copy(ttlEvCompTenthStops = msg.tenthStops)
-                    } else {
-                        cur
-                    }
+                is PupDecodedMessage.AirChannelBounds -> {
+                    val safeMin = msg.minChannel.coerceIn(1, 100)
+                    val safeMax = msg.maxChannel.coerceIn(safeMin, 100)
+                    cur.copy(minAirChannel = safeMin, maxAirChannel = safeMax)
                 }
-                is PupDecodedMessage.AirTtlEvCompensation -> cur.copy(ttlEvCompTenthStops = msg.tenthStops)
+                is PupDecodedMessage.AirProtocol -> cur.copy(airProtocolMode = msg.mode)
+                is PupDecodedMessage.StrobeFlashMode -> {
+                    val isTtl = (msg.mode == FlashMode.TTL)
+                    cur.copy(
+                        flashMode = msg.mode,
+                        ttlAutoEnabled = isTtl,
+                        remoteMode = if (isTtl) RemoteOperatingMode.AUTO_TTL else RemoteOperatingMode.MANUAL,
+                    )
+                }
+                is PupDecodedMessage.RemoteModeState -> {
+                    val isTtl = (msg.mode == RemoteOperatingMode.AUTO_TTL)
+                    cur.copy(
+                        remoteMode = msg.mode,
+                        ttlAutoEnabled = isTtl,
+                        flashMode = if (isTtl) FlashMode.TTL else FlashMode.MANUAL,
+                    )
+                }
+                is PupDecodedMessage.TtlAutoState -> {
+                    cur.copy(
+                        ttlAutoEnabled = msg.enabled,
+                        remoteMode = if (msg.enabled) RemoteOperatingMode.AUTO_TTL else RemoteOperatingMode.MANUAL,
+                        flashMode = if (msg.enabled) FlashMode.TTL else FlashMode.MANUAL,
+                    )
+                }
+                is PupDecodedMessage.AirGroupTtlBias -> {
+                    val updatedBiases = when (msg.group) {
+                        AirGroup.ALL -> cur.groupTtlBiasesTenthStops + (AirGroup.ALL to msg.tenthStops) + (AirGroup.GROUP_A to msg.tenthStops)
+                        AirGroup.GROUP_A -> cur.groupTtlBiasesTenthStops + (AirGroup.GROUP_A to msg.tenthStops) + (AirGroup.ALL to msg.tenthStops)
+                        else -> cur.groupTtlBiasesTenthStops + (msg.group to msg.tenthStops)
+                    }
+                    val master = if (msg.group == AirGroup.ALL || msg.group == AirGroup.GROUP_A) msg.tenthStops else cur.ttlEvCompTenthStops
+                    cur.copy(groupTtlBiasesTenthStops = updatedBiases, ttlEvCompTenthStops = master)
+                }
+                is PupDecodedMessage.AirTtlEvCompensation -> cur.copy(
+                    ttlEvCompTenthStops = msg.tenthStops,
+                    groupTtlBiasesTenthStops = cur.groupTtlBiasesTenthStops + (AirGroup.ALL to msg.tenthStops) + (AirGroup.GROUP_A to msg.tenthStops),
+                )
+                is PupDecodedMessage.RemoteSyncMode -> cur.copy(syncMode = msg.mode)
+                is PupDecodedMessage.RemoteAfAssist -> cur.copy(afAssistMode = msg.mode)
+                is PupDecodedMessage.RemoteRfPower -> cur.copy(rfPowerLevel = msg.level)
+                is PupDecodedMessage.RfPowerRange -> cur.copy(rfPowerRange = msg.minDbm..msg.maxDbm)
+                is PupDecodedMessage.MonolightZoomState -> cur.copy(
+                    zoomMode = msg.mode,
+                    zoomValue = msg.value ?: cur.zoomValue,
+                    zoomRange = msg.range ?: cur.zoomRange,
+                )
+                is PupDecodedMessage.ReadySignalState -> {
+                    val soundOn = (msg.mode == ReadySignalMode.SOUND || msg.mode == ReadySignalMode.SOUND_AND_DIM)
+                    val dimOn = (msg.mode == ReadySignalMode.DIM || msg.mode == ReadySignalMode.SOUND_AND_DIM)
+                    cur.copy(
+                        readySignalMode = msg.mode,
+                        readySoundEnabled = soundOn,
+                        dimDuringRecharge = dimOn,
+                    )
+                }
+                is PupDecodedMessage.AutoOffMinutes -> cur.copy(autoOffMinutes = msg.minutes)
+                is PupDecodedMessage.AutoStandbyMinutes -> cur.copy(autoStandbyMinutes = msg.minutes)
+                is PupDecodedMessage.ControlSoundsState -> cur.copy(controlSoundsEnabled = msg.enabled)
                 is PupDecodedMessage.AirHeadMask -> cur.copy(airHeadMask = msg.mask)
                 is PupDecodedMessage.AirModelLightMask -> cur.copy(airModelLightMask = msg.mask)
-                is PupDecodedMessage.AirAbsoluteGroupPower -> cur.copy(groupPowersTenthStops = msg.groupTenthStops)
+                is PupDecodedMessage.AirAbsoluteGroupPower -> {
+                    val userPowers = userDirectedGroupPowers[address]
+                    val merged = if (userPowers.isNullOrEmpty()) {
+                        msg.groupTenthStops
+                    } else {
+                        msg.groupTenthStops.mapIndexed { idx, p ->
+                            userPowers[idx] ?: p
+                        }
+                    }
+                    cur.copy(groupPowersTenthStops = merged)
+                }
                 is PupDecodedMessage.AirGroupEnergyFeedback -> cur.copy(
                     groupPowersTenthStops = msg.currentByGroup.take(6).map { v ->
                         if (v in 1..100) v else 50

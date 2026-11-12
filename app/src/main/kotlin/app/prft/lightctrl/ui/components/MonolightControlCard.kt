@@ -57,9 +57,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import app.prft.lightctrl.domain.ConnectedProfotoUnit
+import app.prft.lightctrl.domain.PowerScaleConverter
 import app.prft.lightctrl.protocol.AirGroup
 import app.prft.lightctrl.protocol.DisplayBrightnessLevel
 import app.prft.lightctrl.protocol.DisplayOrientationMode
+import app.prft.lightctrl.protocol.MonolightZoomMode
+import app.prft.lightctrl.protocol.ReadySignalMode
 import app.prft.lightctrl.protocol.VideoLightPowerMode
 import app.prft.lightctrl.ui.theme.StudioColors
 import kotlin.math.roundToInt
@@ -96,6 +99,9 @@ fun MonolightControlCard(
     onEditNickname: () -> Unit,
     onRetryConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    isDualPowerReadoutEnabled: Boolean = false,
+    onZoomChange: (mode: MonolightZoomMode, position: Int?) -> Unit = { _, _ -> },
+    onReadySignalModeChange: (ReadySignalMode) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var showRigSheet by rememberSaveable { mutableStateOf(false) }
@@ -204,12 +210,20 @@ fun MonolightControlCard(
             }
 
             // 2. Flash Tenth-Stop Power Scrubber
+            val dualReadout = if (isDualPowerReadoutEnabled) {
+                val maxWs = unit.modelSpec.maxWattSeconds
+                val ws = if (maxWs != null && maxWs > 0) PowerScaleConverter.formatWattSeconds(maxWs, unit.flashPowerTenthStops) else null
+                val frac = PowerScaleConverter.formatPowerFraction(unit.flashPowerTenthStops)
+                if (ws != null) "$ws · $frac" else frac
+            } else null
+
             TenthStopPowerSlider(
                 label = if (unit.headEnabled) "Flash Energy (f-stops)" else "Flash Head Muted",
                 valueTenthStops = unit.flashPowerTenthStops,
                 minTenthStops = unit.minFlashTenthStops,
                 maxTenthStops = unit.maxFlashTenthStops,
                 enabled = unit.isReady && unit.headEnabled,
+                secondaryReadout = dualReadout,
                 onValueChanged = onPowerChange,
             )
 
@@ -274,6 +288,8 @@ fun MonolightControlCard(
             onCaptureVideoPriority = onCaptureVideoPriority,
             onIrSlaveToggle = onIrSlaveToggle,
             onReadySoundToggle = onReadySoundToggle,
+            onZoomChange = onZoomChange,
+            onReadySignalModeChange = onReadySignalModeChange,
             onDisplayOrientation = onDisplayOrientation,
             onDisplayBrightness = onDisplayBrightness,
             onRenameAlias = onRenameAlias,
@@ -548,6 +564,8 @@ private fun MonolightRigBottomSheet(
     onCaptureVideoPriority: (Boolean) -> Unit,
     onIrSlaveToggle: (Boolean) -> Unit,
     onReadySoundToggle: (Boolean) -> Unit,
+    onZoomChange: (mode: MonolightZoomMode, position: Int?) -> Unit,
+    onReadySignalModeChange: (ReadySignalMode) -> Unit,
     onDisplayOrientation: (DisplayOrientationMode) -> Unit,
     onDisplayBrightness: (DisplayBrightnessLevel) -> Unit,
     onRenameAlias: (String?) -> Unit,
@@ -680,12 +698,73 @@ private fun MonolightRigBottomSheet(
                         modifier = Modifier.heightIn(min = 48.dp),
                     )
                 }
-                FilterChip(
-                    selected = unit.readySoundEnabled,
-                    onClick = { onReadySoundToggle(!unit.readySoundEnabled) },
-                    label = { Text("Ready Beep") },
-                    modifier = Modifier.heightIn(min = 48.dp),
+            }
+
+            // Monolight Zoom Controls (op=161..163)
+            if (unit.supportsZoom) {
+                Text(
+                    text = "Monolight Zoom (Op 161–163)",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = StudioColors.TextSecondary,
                 )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = unit.zoomMode == MonolightZoomMode.AUTO,
+                        onClick = { onZoomChange(MonolightZoomMode.AUTO, null) },
+                        label = { Text("Auto Zoom") },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    )
+                    FilterChip(
+                        selected = unit.zoomMode == MonolightZoomMode.MANUAL,
+                        onClick = { onZoomChange(MonolightZoomMode.MANUAL, unit.zoomValue ?: 25) },
+                        label = { Text("Manual Zoom") },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    )
+                }
+                if (unit.zoomMode == MonolightZoomMode.MANUAL) {
+                    val minZ = unit.zoomRange?.first ?: 0
+                    val maxZ = unit.zoomRange?.last ?: 100
+                    val curZ = (unit.zoomValue ?: minZ).coerceIn(minZ, maxZ)
+                    Text("Zoom Position: $curZ", style = MaterialTheme.typography.bodyMedium)
+                    Slider(
+                        value = curZ.toFloat(),
+                        onValueChange = { onZoomChange(MonolightZoomMode.MANUAL, it.roundToInt()) },
+                        valueRange = minZ.toFloat()..maxZ.toFloat(),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    )
+                }
+            }
+
+            // Ready Signal Mode Selector (op=217)
+            Text(
+                text = "Ready Signal Mode (Op 217)",
+                style = MaterialTheme.typography.labelLarge,
+                color = StudioColors.TextSecondary,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ReadySignalMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = unit.readySignalMode == mode,
+                        onClick = { onReadySignalModeChange(mode) },
+                        label = {
+                            Text(
+                                when (mode) {
+                                    ReadySignalMode.OFF -> "OFF"
+                                    ReadySignalMode.SOUND -> "BEEP"
+                                    ReadySignalMode.DIM -> "DIM"
+                                    ReadySignalMode.SOUND_AND_DIM -> "BEEP + DIM"
+                                }
+                            )
+                        },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    )
+                }
             }
 
             Text("Fixture LCD Brightness", style = MaterialTheme.typography.labelLarge, color = StudioColors.TextSecondary)

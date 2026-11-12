@@ -1,16 +1,16 @@
-Prft Light Ctrl is an open-source, offline Bluetooth Low Energy (BLE) studio lighting controller engineered in Kotlin and Jetpack Compose for Android 12+ phones and foldables (Portrait, Landscape, and foldable displays).
+Prft Light Ctrl is an open-source, air-gapped Bluetooth Low Energy (BLE) studio lighting controller engineered in Kotlin and Jetpack Compose for Android 12+ phones, tablets, and foldables (Portrait, Landscape NavigationRail, and unfolded inner displays).
 
 Supported Hardware:
 • Profoto B10X Pro / Plus & B10X (500 Ws / 250 Ws flash energy + 3250 lm bi-color 3000–6500 K continuous modeling light)
 • Profoto A2 (100 Ws flash energy + LED modeling light)
-• Profoto Connect Pro (100-channel Air 2 / AirX 6-group A–F studio remote, including LE Coded PHY Air Range mode)
+• Profoto Connect Pro (100-channel Air 2 / AirX 6-group A–F studio remote, digital Auto TTL / Manual switch, and LE Coded PHY Air Range mode)
 • Profoto Connect (buttonless AirTTL / Manual / Off remote, studio group standby, Air modeling toggle, and master TTL EV trim)
 
 Key Features:
-• 4-Tab Studio Console (Groups / Lights / LED / Devices): Non-scrolling 6-channel vertical studio faders (Groups A–F, 1.0–10.0 f-stops), ±0.1-stop steppers, ON/OFF group mute toggles, master ALL studio ratio trims, group-filtered fixture cards, and dedicated continuous/modeling LED console.
-• Custom Equipment Nicknames: Label units by studio role (e.g., Key Light, Hair Light, Main Trigger) while keeping the hardware model permanently visible.
-• Monochrome Black & White Studio UI: Matte charcoal dark palette (#0D0D0F–#222226) with high-contrast #FFFFFF studio controls designed for dark studio sets without pure-black OLED halation.
-• Dual-UUID + Dual-PHY Native BLE Engine: Simultaneous LE 1M and LE Coded PHY scanning of SIG 0xFDBB and legacy 128-bit GATT services, MTU 255 negotiation, session authentication, and priority out-of-band Test Flash triggering.
+• Adaptive Portrait & Landscape 4-Tab Studio Console (Groups / Lights / LED / Devices): Non-scrolling 6-channel studio faders (Groups A–F, full 0.1–10.0 f-stop floor), ±0.1-stop steppers, ON/OFF group mute toggles, master ALL studio ratio trims, Dual Power Readout (Watt-seconds & fractional 1/1..1/512 stops alongside 1–10 scale), and dedicated continuous/modeling LED console.
+• Studio Scenes, Group Roles & TTL Ratios: Save and recall complete multi-group lighting setups with offline JSON clipboard export/import, assign Named Group Roles (Key, Fill, Rim, Hair, Background, Kicker, Top, or custom), and trim Per-Group TTL EV ratio biases (Groups A–C) plus Master TTL EV.
+• Full Remote & Fixture Controls: Dedicated Remote Settings sheet (1st/2nd Curtain, X-Sync, Auto FP / HSS, Global Shutter, AF-Assist, RF Power P1–P4, Auto-Off Sleep, Display Brightness, Battery Chemistry, Control Sounds, 1–100 Channel Picker), Monolight Zoom & Ready Signal (Beep / Dim), Pinned Kit auto-reconnect, and FIRE CTA + optional foreground Volume Key trigger.
+• Dual-UUID + Dual-PHY Native BLE Engine: Simultaneous LE 1M and LE Coded PHY scanning of SIG 0xFDBB, AUTH (8f65073d-...), and legacy 128-bit GATT services, MTU 255 negotiation, session authentication, and priority out-of-band FIRE triggering.
 • Bootloader / DFU Quarantine: Strict compile-time and runtime blocklists prevent any access to firmware-update GATT UUIDs or DFU opcodes.
 • 100% Offline & Tracker-Free: Zero INTERNET permission, zero location tracking (neverForLocation BLE scan), zero analytics, and zero proprietary SDKs.
 

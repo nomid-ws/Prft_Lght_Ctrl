@@ -16,6 +16,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -32,8 +34,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.border
 import androidx.compose.ui.unit.dp
 import app.prft.lightctrl.domain.ConnectedProfotoUnit
+import app.prft.lightctrl.domain.PowerScaleConverter
 import app.prft.lightctrl.protocol.AirGroup
 import app.prft.lightctrl.protocol.AirProtocolMode
 import app.prft.lightctrl.protocol.FlashMode
@@ -49,16 +53,21 @@ import java.util.Locale
 @Composable
 fun ConnectProConsoleCard(
     unit: ConnectedProfotoUnit,
+    groupRoles: Map<AirGroup, String> = emptyMap(),
+    isDualPowerReadoutEnabled: Boolean = false,
+    onOperatingModeChange: (RemoteOperatingMode) -> Unit = {},
     onFlashModeChange: (FlashMode) -> Unit,
     onAirProtocolChange: (AirProtocolMode) -> Unit,
     onAirChannelChange: (Int) -> Unit,
     onTtlEvChange: (Int) -> Unit,
+    onGroupTtlBiasChange: (group: AirGroup, tenthStops: Int) -> Unit = { _, _ -> },
     onGroupPowerChange: (groupIdx: Int, tenthStops: Int) -> Unit,
     onGroupMuteToggle: (groupIdx: Int) -> Unit,
     onGroupModelingToggle: (groupIdx: Int) -> Unit,
     onAllGroupsTrim: (deltaTenthStops: Int) -> Unit,
     onTestFlash: () -> Unit,
     onEditNickname: () -> Unit,
+    onOpenRemoteSettings: () -> Unit = {},
     onRetryConnect: () -> Unit,
     onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
@@ -97,9 +106,20 @@ fun ConnectProConsoleCard(
                 }
 
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    IconButton(
+                        onClick = onOpenRemoteSettings,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Open Remote Settings for ${unit.displayTitle}",
+                            tint = StudioColors.TextSecondary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                     IconButton(
                         onClick = onEditNickname,
                         modifier = Modifier.size(48.dp),
@@ -139,25 +159,27 @@ fun ConnectProConsoleCard(
                 }
             }
 
-            // Mode (synced from Connect Pro hardware collar via Opcode 144) & AirX Protocol Controls
+            // Digital Operating Mode (Opcode 144: Auto TTL <-> Manual) & AirX Protocol Controls
+            val isTtlMode = unit.remoteMode == RemoteOperatingMode.AUTO_TTL || unit.flashMode == FlashMode.TTL
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .heightIn(min = 48.dp)
-                        .background(StudioColors.ControlContainer, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 12.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "Collar: ${unit.remoteMode.label}",
-                        style = MaterialTheme.typography.labelLarge.copy(fontFamily = FontFamily.Monospace),
-                        color = StudioColors.TextPrimary,
-                    )
-                }
+                FilterChip(
+                    selected = isTtlMode,
+                    onClick = { onOperatingModeChange(RemoteOperatingMode.AUTO_TTL) },
+                    enabled = unit.isReady,
+                    label = { Text("Auto (TTL)") },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                )
+                FilterChip(
+                    selected = !isTtlMode,
+                    onClick = { onOperatingModeChange(RemoteOperatingMode.MANUAL) },
+                    enabled = unit.isReady,
+                    label = { Text("Manual") },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                )
                 FilterChip(
                     selected = unit.airProtocolMode == AirProtocolMode.AIR_2,
                     onClick = {
@@ -198,7 +220,7 @@ fun ConnectProConsoleCard(
                 }
             }
 
-            if (unit.remoteMode == RemoteOperatingMode.AUTO_TTL || unit.flashMode == FlashMode.TTL) {
+            if (isTtlMode) {
                 TenthStopPowerSlider(
                     label = "AirTTL Exposure Bias (EV)",
                     valueTenthStops = unit.ttlEvCompTenthStops.coerceIn(-20, 20),
@@ -209,6 +231,11 @@ fun ConnectProConsoleCard(
                     coarseStepTenths = 3,
                     coarseLabelPrefix = "0.3",
                     onValueChanged = onTtlEvChange,
+                )
+                GroupTtlBiasSection(
+                    unit = unit,
+                    groupRoles = groupRoles,
+                    onGroupTtlBiasChange = onGroupTtlBiasChange,
                 )
             }
 
@@ -221,11 +248,13 @@ fun ConnectProConsoleCard(
                 color = StudioColors.TextSecondary,
             )
 
-            val groupLabels = listOf("A", "B", "C", "D", "E", "F")
-            groupLabels.forEachIndexed { idx, grpName ->
+            val groupList = listOf(AirGroup.GROUP_A, AirGroup.GROUP_B, AirGroup.GROUP_C, AirGroup.GROUP_D, AirGroup.GROUP_E, AirGroup.GROUP_F)
+            groupList.forEachIndexed { idx, grp ->
                 val active = (unit.airHeadMask and (1 shl idx)) != 0
                 val modOn = (unit.airModelLightMask and (1 shl idx)) != 0
                 val tenths = unit.groupPowersTenthStops.getOrElse(idx) { 70 }
+                val role = groupRoles[grp]
+                val grpTitle = if (!role.isNullOrBlank()) "${grp.label} · $role" else grp.label
 
                 Row(
                     modifier = Modifier
@@ -245,7 +274,7 @@ fun ConnectProConsoleCard(
                             enabled = unit.isReady,
                             label = {
                                 Text(
-                                    text = grpName,
+                                    text = grpTitle,
                                     fontWeight = FontWeight.Bold,
                                 )
                             },
@@ -254,19 +283,26 @@ fun ConnectProConsoleCard(
                                 .widthIn(min = 48.dp),
                         )
 
-                        Box(modifier = Modifier.widthIn(min = 52.dp)) {
+                        Column {
                             Text(
                                 text = if (active) String.format(Locale.US, "%.1f", tenths / 10.0) else "OFF",
                                 style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
                                 color = if (active) StudioColors.TextPrimary else StudioColors.TextSecondary,
                             )
+                            if (active && isDualPowerReadoutEnabled) {
+                                Text(
+                                    text = PowerScaleConverter.formatPowerFraction(tenths),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                                    color = StudioColors.TextSecondary,
+                                )
+                            }
                         }
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalButton(
                             onClick = { onGroupPowerChange(idx, tenths - 1) },
-                            enabled = unit.isReady && active && tenths > 10,
+                            enabled = unit.isReady && active && tenths > 1,
                             modifier = Modifier
                                 .heightIn(min = 48.dp)
                                 .widthIn(min = 48.dp),
@@ -312,6 +348,17 @@ fun ConnectProConsoleCard(
                 ) { Text("ALL +0.5") }
             }
 
+            OutlinedButton(
+                onClick = onOpenRemoteSettings,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+            ) {
+                Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(" Remote Settings (Sync, AF, RF, Sleep, Display)", style = MaterialTheme.typography.labelLarge)
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
@@ -335,14 +382,17 @@ fun ConnectProConsoleCard(
 @Composable
 fun ConnectTriggerCard(
     unit: ConnectedProfotoUnit,
-    onModeChange: (RemoteOperatingMode) -> Unit,
+    groupRoles: Map<AirGroup, String> = emptyMap(),
+    onModeChange: (RemoteOperatingMode) -> Unit = {},
     onTtlEvChange: (Int) -> Unit,
+    onGroupTtlBiasChange: (group: AirGroup, tenthStops: Int) -> Unit = { _, _ -> },
     onAirChannelChange: (Int) -> Unit,
     onRelativeGroupTrim: (AirGroup, Int) -> Unit,
     onGroupMuteToggle: (groupIdx: Int) -> Unit = {},
     onGroupModelingToggle: (groupIdx: Int) -> Unit = {},
     onTestFlash: () -> Unit,
     onEditNickname: () -> Unit,
+    onOpenRemoteSettings: () -> Unit = {},
     onRetryConnect: () -> Unit,
     onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
@@ -380,9 +430,20 @@ fun ConnectTriggerCard(
                 }
 
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    IconButton(
+                        onClick = onOpenRemoteSettings,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Open Remote Settings for ${unit.displayTitle}",
+                            tint = StudioColors.TextSecondary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                     IconButton(
                         onClick = onEditNickname,
                         modifier = Modifier.size(48.dp),
@@ -422,36 +483,39 @@ fun ConnectTriggerCard(
                 }
             }
 
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+            // Read-only hardware collar ring indicator (Profoto Connect uses physical rotating ring for OFF/AUTO/MANUAL)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(StudioColors.ControlContainer, RoundedCornerShape(10.dp))
+                    .border(1.dp, StudioColors.SubtleOutline, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
-                listOf(
-                    RemoteOperatingMode.AUTO_TTL,
-                    RemoteOperatingMode.MANUAL,
-                    RemoteOperatingMode.OFF,
-                ).forEach { mode ->
-                    FilterChip(
-                        selected = unit.remoteMode == mode,
-                        onClick = { onModeChange(mode) },
-                        enabled = unit.isReady,
-                        label = { Text(mode.label) },
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    )
-                }
+                Text(
+                    text = "Collar Ring: ${unit.remoteMode.label} (physical switch)",
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                    color = StudioColors.TextPrimary,
+                )
             }
 
-            TenthStopPowerSlider(
-                label = "AirTTL Exposure Offset (EV)",
-                valueTenthStops = unit.ttlEvCompTenthStops.coerceIn(-20, 20),
-                minTenthStops = -20,
-                maxTenthStops = 20,
-                enabled = unit.isReady,
-                showSign = true,
-                coarseStepTenths = 3,
-                coarseLabelPrefix = "0.3",
-                onValueChanged = onTtlEvChange,
-            )
+            if (unit.remoteMode == RemoteOperatingMode.AUTO_TTL) {
+                TenthStopPowerSlider(
+                    label = "AirTTL Exposure Offset (EV)",
+                    valueTenthStops = unit.ttlEvCompTenthStops.coerceIn(-20, 20),
+                    minTenthStops = -20,
+                    maxTenthStops = 20,
+                    enabled = unit.isReady,
+                    showSign = true,
+                    coarseStepTenths = 3,
+                    coarseLabelPrefix = "0.3",
+                    onValueChanged = onTtlEvChange,
+                )
+                GroupTtlBiasSection(
+                    unit = unit,
+                    groupRoles = groupRoles,
+                    onGroupTtlBiasChange = onGroupTtlBiasChange,
+                )
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -536,12 +600,99 @@ fun ConnectTriggerCard(
                 ) { Text("Air Trim +0.5") }
             }
 
+            OutlinedButton(
+                onClick = onOpenRemoteSettings,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+            ) {
+                Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(" Remote Settings (Sync, Sleep, Channel)", style = MaterialTheme.typography.labelLarge)
+            }
+
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(
                     onClick = onDisconnect,
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) {
                     Text("Disconnect Trigger", color = StudioColors.StudioRed)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupTtlBiasSection(
+    unit: ConnectedProfotoUnit,
+    groupRoles: Map<AirGroup, String>,
+    onGroupTtlBiasChange: (group: AirGroup, tenthStops: Int) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Per-Group TTL Ratio Bias (A–C)",
+            style = MaterialTheme.typography.labelLarge,
+            color = StudioColors.TextSecondary,
+        )
+        listOf(AirGroup.GROUP_A, AirGroup.GROUP_B, AirGroup.GROUP_C).forEach { grp ->
+            val tenths = (unit.groupTtlBiasesTenthStops[grp] ?: 0).coerceIn(-20, 20)
+            val sign = if (tenths > 0) "+" else ""
+            val formatted = String.format(Locale.US, "%s%.1f EV", sign, tenths / 10.0)
+            val role = groupRoles[grp]
+            val labelText = if (!role.isNullOrBlank()) "Grp ${grp.label} · $role" else "Grp ${grp.label}"
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(StudioColors.ControlContainer, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = labelText,
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        color = StudioColors.TextPrimary,
+                    )
+                    Text(
+                        text = formatted,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                        color = if (tenths != 0) StudioColors.AirCyan else StudioColors.TextSecondary,
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(
+                        onClick = { onGroupTtlBiasChange(grp, (tenths - 1).coerceAtLeast(-20)) },
+                        enabled = unit.isReady && tenths > -20,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .widthIn(min = 48.dp),
+                    ) { Text("-") }
+
+                    FilledTonalButton(
+                        onClick = { onGroupTtlBiasChange(grp, 0) },
+                        enabled = unit.isReady && tenths != 0,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .widthIn(min = 48.dp),
+                    ) { Text("0.0") }
+
+                    FilledTonalButton(
+                        onClick = { onGroupTtlBiasChange(grp, (tenths + 1).coerceAtMost(20)) },
+                        enabled = unit.isReady && tenths < 20,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .widthIn(min = 48.dp),
+                    ) { Text("+") }
                 }
             }
         }

@@ -178,4 +178,218 @@ class PupFrameCodecTest {
         assertEquals(-7, bias.tenthStops)
         assertEquals(AirGroup.ALL, bias.group)
     }
+
+    @Test
+    fun `AirPxBias opcode 131 boundary check and group restrictions`() {
+        // Valid boundaries -20..20 and groups A..C + ALL
+        val validA = PupFrameCodec.encodeAirPxBias(counter = 1, tenthStops = -20, group = AirGroup.GROUP_A)
+        assertEquals(-20, (PupFrameCodec.decodeMessage(validA).second as PupDecodedMessage.AirGroupTtlBias).tenthStops)
+        val validC = PupFrameCodec.encodeAirPxBias(counter = 2, tenthStops = 20, group = AirGroup.GROUP_C)
+        assertEquals(20, (PupFrameCodec.decodeMessage(validC).second as PupDecodedMessage.AirGroupTtlBias).tenthStops)
+        val validB = PupFrameCodec.encodeAirPxBias(counter = 3, tenthStops = 0, group = AirGroup.GROUP_B)
+        assertEquals(0, (PupFrameCodec.decodeMessage(validB).second as PupDecodedMessage.AirGroupTtlBias).tenthStops)
+
+        // tenthStops out of bounds (-21 and 21)
+        var errThrown = false
+        try {
+            PupFrameCodec.encodeAirPxBias(counter = 4, tenthStops = -21, group = AirGroup.GROUP_A)
+        } catch (_: PupCodecException) {
+            errThrown = true
+        }
+        assertTrue("Expected exception for tenthStops = -21", errThrown)
+
+        errThrown = false
+        try {
+            PupFrameCodec.encodeAirPxBias(counter = 5, tenthStops = 21, group = AirGroup.GROUP_A)
+        } catch (_: PupCodecException) {
+            errThrown = true
+        }
+        assertTrue("Expected exception for tenthStops = 21", errThrown)
+
+        // Non-TTL groups D, E, F rejected
+        for (disallowed in listOf(AirGroup.GROUP_D, AirGroup.GROUP_E, AirGroup.GROUP_F)) {
+            var groupBlocked = false
+            try {
+                PupFrameCodec.encodeAirPxBias(counter = 6, tenthStops = 0, group = disallowed)
+            } catch (_: PupCodecException) {
+                groupBlocked = true
+            }
+            assertTrue("Expected group $disallowed to be rejected", groupBlocked)
+        }
+    }
+
+    @Test
+    fun `AirAbsoluteGroupEnergy opcode 177 Map overload and 1 to 100 f-stop bounds`() {
+        val validMap = mapOf(
+            AirGroup.GROUP_A to 1,
+            AirGroup.GROUP_B to 25,
+            AirGroup.GROUP_C to 50,
+            AirGroup.GROUP_D to 75,
+            AirGroup.GROUP_E to 90,
+            AirGroup.GROUP_F to 100,
+        )
+        val raw = PupFrameCodec.encodeAirAbsoluteGroupEnergy(counter = 10, groupEnergies = validMap)
+        val (_, msg) = PupFrameCodec.decodeMessage(raw)
+        val powerMsg = msg as PupDecodedMessage.AirAbsoluteGroupPower
+        assertEquals(listOf(1, 25, 50, 75, 90, 100), powerMsg.groupTenthStops)
+
+        // Power out of bounds: 0 (below floor) and 101 (above max)
+        var blocked = false
+        try {
+            PupFrameCodec.encodeAirAbsoluteGroupEnergy(counter = 11, groupEnergies = validMap + (AirGroup.GROUP_A to 0))
+        } catch (_: PupCodecException) {
+            blocked = true
+        }
+        assertTrue("Expected 0 power to be rejected", blocked)
+
+        blocked = false
+        try {
+            PupFrameCodec.encodeAirAbsoluteGroupEnergy(counter = 12, groupEnergies = validMap + (AirGroup.GROUP_F to 101))
+        } catch (_: PupCodecException) {
+            blocked = true
+        }
+        assertTrue("Expected 101 power to be rejected", blocked)
+
+        // Incomplete map missing a group
+        blocked = false
+        try {
+            val incompleteMap = mapOf(
+                AirGroup.GROUP_A to 10,
+                AirGroup.GROUP_B to 20,
+            )
+            PupFrameCodec.encodeAirAbsoluteGroupEnergy(counter = 13, groupEnergies = incompleteMap)
+        } catch (_: PupCodecException) {
+            blocked = true
+        }
+        assertTrue("Expected incomplete map to be rejected", blocked)
+    }
+
+    @Test
+    fun `Remote settings and triggers opcodes encode and decode accurately`() {
+        // Opcode 140: SyncMode
+        val rawSync = PupFrameCodec.encodeSyncMode(counter = 1, mode = SyncTriggerMode.GLOBAL_SHUTTER)
+        val (_, syncMsg) = PupFrameCodec.decodeMessage(rawSync)
+        assertEquals(SyncTriggerMode.GLOBAL_SHUTTER, (syncMsg as PupDecodedMessage.RemoteSyncMode).mode)
+
+        // Opcode 160: AfAssistMode
+        val rawAf = PupFrameCodec.encodeAfAssistMode(counter = 2, mode = AfAssistMode.AUTO)
+        val (_, afMsg) = PupFrameCodec.decodeMessage(rawAf)
+        assertEquals(AfAssistMode.AUTO, (afMsg as PupDecodedMessage.RemoteAfAssist).mode)
+
+        // Opcode 147: RmiRfPower
+        val rawRf = PupFrameCodec.encodeRfPower(counter = 3, level = RfPowerLevel.P2)
+        val (_, rfMsg) = PupFrameCodec.decodeMessage(rawRf)
+        assertEquals(RfPowerLevel.P2, (rfMsg as PupDecodedMessage.RemoteRfPower).level)
+
+        // Opcode 148: RadioModeRange (decoder)
+        val rawRfRange = PupFrameCodec.encodePacket(counter = 4, opcode = PupOpcodes.RADIO_MODE_RANGE, payload = byteArrayOf(1, 4))
+        val (_, rfRangeMsg) = PupFrameCodec.decodeMessage(rawRfRange)
+        val rfRange = rfRangeMsg as PupDecodedMessage.RfPowerRange
+        assertEquals(1, rfRange.minDbm)
+        assertEquals(4, rfRange.maxDbm)
+
+        // Opcode 161: ZoomMode
+        val rawZoomMode = PupFrameCodec.encodeZoomMode(counter = 5, mode = MonolightZoomMode.AUTO)
+        val (_, zoomModeMsg) = PupFrameCodec.decodeMessage(rawZoomMode)
+        assertEquals(MonolightZoomMode.AUTO, (zoomModeMsg as PupDecodedMessage.MonolightZoomState).mode)
+
+        // Opcode 162: ZoomRange (decoder: 24..105 mm)
+        val zoomRangePayload = byteArrayOf(24, 0, 105, 0)
+        val rawZoomRange = PupFrameCodec.encodePacket(counter = 6, opcode = PupOpcodes.ZOOM_RANGE, payload = zoomRangePayload)
+        val (_, zoomRangeMsg) = PupFrameCodec.decodeMessage(rawZoomRange)
+        assertEquals(24..105, (zoomRangeMsg as PupDecodedMessage.MonolightZoomState).range)
+
+        // Opcode 163: ZoomValue
+        val rawZoomVal = PupFrameCodec.encodeZoomValue(counter = 7, position = 70)
+        val (_, zoomValMsg) = PupFrameCodec.decodeMessage(rawZoomVal)
+        assertEquals(70, (zoomValMsg as PupDecodedMessage.MonolightZoomState).value)
+
+        // Opcode 217: ReadySignalMode
+        val rawReady = PupFrameCodec.encodeReadySignalMode(counter = 8, mode = ReadySignalMode.SOUND_AND_DIM)
+        val (_, readyMsg) = PupFrameCodec.decodeMessage(rawReady)
+        assertEquals(ReadySignalMode.SOUND_AND_DIM, (readyMsg as PupDecodedMessage.ReadySignalState).mode)
+
+        // Opcode 41: AutoOffTimeout
+        val rawAutoOff = PupFrameCodec.encodeAutoOffTimeout(counter = 9, minutes = 60)
+        val (_, autoOffMsg) = PupFrameCodec.decodeMessage(rawAutoOff)
+        assertEquals(60, (autoOffMsg as PupDecodedMessage.AutoOffMinutes).minutes)
+
+        // Opcode 40: AutoStandbyTimeout
+        val rawStandby = PupFrameCodec.encodeAutoStandbyTimeout(counter = 10, minutes = 30)
+        val (_, standbyMsg) = PupFrameCodec.decodeMessage(rawStandby)
+        assertEquals(30, (standbyMsg as PupDecodedMessage.AutoStandbyMinutes).minutes)
+
+        // Opcode 39: DisplayBrightness (Int overload)
+        val rawBright = PupFrameCodec.encodeDisplayBrightness(counter = 11, brightness = 1)
+        val (_, brightMsg) = PupFrameCodec.decodeMessage(rawBright)
+        assertEquals(DisplayBrightnessLevel.MEDIUM, (brightMsg as PupDecodedMessage.DisplayBrightness).level)
+
+        // Opcode 180: BatteryType (Int overload)
+        val rawBat = PupFrameCodec.encodeBatteryType(counter = 12, batteryType = 1)
+        val (_, batMsg) = PupFrameCodec.decodeMessage(rawBat)
+        assertEquals(BatteryChemistry.NIMH, (batMsg as PupDecodedMessage.BatteryTypeSetting).chemistry)
+
+        // Opcode 38: ControlSounds
+        val rawSounds = PupFrameCodec.encodeControlSounds(counter = 13, enabled = false)
+        val (_, soundsMsg) = PupFrameCodec.decodeMessage(rawSounds)
+        assertFalse((soundsMsg as PupDecodedMessage.ControlSoundsState).enabled)
+    }
+
+    @Test
+    fun `Quarantined firmware opcodes blocked across query and direct formats`() {
+        for (opcode in listOf(PupOpcodes.FIRMWARE_ARM_QUARANTINED, PupOpcodes.BLOB_DATA_QUARANTINED, PupOpcodes.ARM_FW_UPDATE_QUARANTINED)) {
+            // Direct command
+            var blockedDirect = false
+            try {
+                PupFrameCodec.encodePacket(counter = 1, opcode = opcode)
+            } catch (_: PupSecurityQuarantineException) {
+                blockedDirect = true
+            }
+            assertTrue("Expected direct opcode $opcode to be quarantined", blockedDirect)
+
+            // Query variant (with query bit 0x8000)
+            var blockedQuery = false
+            try {
+                PupFrameCodec.encodeQuery(counter = 2, opcode = opcode)
+            } catch (_: PupSecurityQuarantineException) {
+                blockedQuery = true
+            }
+            assertTrue("Expected query variant of opcode $opcode to be quarantined", blockedQuery)
+        }
+    }
+
+    @Test
+    fun `HardwareCatalog maxWattSeconds populated accurately for all known flash heads and fallbacks`() {
+        // Known flash models
+        assertEquals(76, HardwareCatalog.resolve(30).maxWattSeconds)  // A10
+        assertEquals(100, HardwareCatalog.resolve(36).maxWattSeconds) // A2
+        assertEquals(250, HardwareCatalog.resolve(140).maxWattSeconds) // B10
+        assertEquals(250, HardwareCatalog.resolve(144).maxWattSeconds) // B10X
+        assertEquals(250, HardwareCatalog.resolve(53).maxWattSeconds)  // B20
+        assertEquals(500, HardwareCatalog.resolve(141).maxWattSeconds) // B10 Plus
+        assertEquals(500, HardwareCatalog.resolve(143).maxWattSeconds) // B10X Pro / Plus
+        assertEquals(500, HardwareCatalog.resolve(52).maxWattSeconds)  // D30
+        assertEquals(500, HardwareCatalog.resolve(54).maxWattSeconds)  // B30
+        assertEquals(750, HardwareCatalog.resolve(48).maxWattSeconds)  // Pro-D3
+        assertEquals(750, HardwareCatalog.resolve(49).maxWattSeconds)  // Pro-D3 750
+        assertEquals(1250, HardwareCatalog.resolve(50).maxWattSeconds) // Pro-D3 1250
+        assertEquals(750, HardwareCatalog.resolve(51).maxWattSeconds)  // Pro-B3
+        assertEquals(2400, HardwareCatalog.resolve(4).maxWattSeconds)  // Pro-11
+
+        // Remotes and Continuous Cinema LEDs (null maxWattSeconds)
+        assertNull(HardwareCatalog.resolve(161).maxWattSeconds) // Connect Pro Canon
+        assertNull(HardwareCatalog.resolve(166).maxWattSeconds) // Connect Pro ISO
+        assertNull(HardwareCatalog.resolve(150).maxWattSeconds) // Connect Canon
+        assertNull(HardwareCatalog.resolve(176).maxWattSeconds) // L1600D
+        assertNull(HardwareCatalog.resolve(180).maxWattSeconds) // L600D
+        assertNull(HardwareCatalog.resolve(174).maxWattSeconds) // ProPanel
+
+        // Fallback name-based heuristics
+        assertEquals(500, HardwareCatalog.resolve(0, "Profoto B1X").maxWattSeconds)
+        assertEquals(250, HardwareCatalog.resolve(0, "Profoto B2").maxWattSeconds)
+        assertEquals(1000, HardwareCatalog.resolve(0, "Profoto D2 1000").maxWattSeconds)
+        assertEquals(500, HardwareCatalog.resolve(0, "Profoto D2 500").maxWattSeconds)
+        assertEquals(2400, HardwareCatalog.resolve(0, "Profoto Pro-10").maxWattSeconds)
+        assertEquals(76, HardwareCatalog.resolve(0, "Profoto A1X").maxWattSeconds)
+    }
 }

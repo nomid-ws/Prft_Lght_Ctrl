@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.prft.lightctrl.ui.theme.StudioColors
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -56,6 +57,7 @@ fun TenthStopPowerSlider(
     showSign: Boolean = false,
     coarseStepTenths: Int = 10,
     coarseLabelPrefix: String = "1.0",
+    secondaryReadout: String? = null,
 ) {
     val haptics = LocalHapticFeedback.current
     var isDragging by remember { mutableStateOf(false) }
@@ -96,11 +98,23 @@ fun TenthStopPowerSlider(
                     )
                     .padding(horizontal = 12.dp, vertical = 4.dp),
             ) {
-                Text(
-                    text = formatTenths(valueTenthStops),
-                    style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace),
-                    color = if (isDragging) StudioColors.OnFlashAmber else StudioColors.TextPrimary,
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = formatTenths(valueTenthStops),
+                        style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace),
+                        color = if (isDragging) StudioColors.OnFlashAmber else StudioColors.TextPrimary,
+                    )
+                    if (!secondaryReadout.isNullOrBlank()) {
+                        Text(
+                            text = secondaryReadout,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                            ),
+                            color = if (isDragging) StudioColors.OnFlashAmber else StudioColors.AirCyan,
+                        )
+                    }
+                }
             }
         }
 

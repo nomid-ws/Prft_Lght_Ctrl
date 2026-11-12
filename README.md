@@ -9,11 +9,12 @@ Cleanroom native Android Bluetooth Low Energy (BLE) studio lighting controller w
 - **Profoto Connect Pro** (`ID 161..166` — 100-channel Air 2 / AirX 6-group `A–F` studio remote, incl. vB5 `LE Coded PHY` Air Range mode)
 - **Profoto Connect** (`ID 150..154` — buttonless AirTTL / Manual / Off remote, studio group standby, Air modeling toggle, and master TTL EV trim)
 
-## Key Features (`v1.4.0`)
+## Key Features (`v1.5.0`)
 
-- **Monochrome Black & White Studio UI:** Matte charcoal surface hierarchy (`#0D0D0F`–`#222226`) with high-contrast `#FFFFFF` studio controls and zero OLED halation.
-- **4-Tab Organized Studio Console (`Groups / Lights / LED / Devices`):** Non-scrolling 6-channel vertical group fader bank (`A–F`), group-filtered fixture cards, dedicated continuous/modeling `LED` console (direct fixtures + Air modeling remotes), persistent equipment nicknames with hardware model permanently visible, and unobtrusive `About` sheet.
-- **Dual-UUID + Dual-PHY (`LE 1M` + `LE Coded PHY`) Native BLE Engine:** Simultaneous scanning of SIG `0xFDBB` (including `[0, productId]` Service Data mount identification and raw AD fallback), legacy `1d944db4-58a0-4177-84da-e29bf5c4630d` GATT services, OS-connected/bonded GATT hydration, `MTU 255` negotiation, `"Profoto Client"` session authentication, and out-of-band `TestFlash` priority dispatch.
+- **Studio Charcoal UI & Adaptive Portrait + Landscape Console:** Matte charcoal surface hierarchy (`#0D0D0F`–`#222226`) with Portrait `ThumbZoneBottomDock` and Landscape/Tablet `NavigationRail` + single-screen 6-fader console.
+- **4-Tab Studio Workflow (`Groups / Lights / LED / Devices`):** Non-scrolling 6-channel group fader bank (`A–F`, full `0.1–10.0` stop precision floor), Named Group Roles (`Key`, `Fill`, `Rim`, etc.), Dual Power Readout (`Ws` & fractional `1/1..1/512` stops alongside `1–10` scale), Saved Studio Scenes with JSON clipboard import/export, and `FIRE` CTA + foreground hardware Volume Key trigger.
+- **Full Remote & Monolight Parity:** `Connect Pro` software `Auto (TTL)` / `Manual` toggle (`op=144`), Per-Group TTL EV ratio biases (`Groups A–C`, `op=148`), Remote Settings sheet (Sync Mode `1st/2nd/X-Sync/HSS/Global Shutter`, AF-Assist, RF Power `P1–P4`, Auto-Off Sleep, Display Brightness, Battery Chemistry, Control Sounds, fast `1–100` Channel Picker), Monolight Zoom (`op=161..163`) & Ready Signal (`op=217`), and Pinned Kit auto-reconnect.
+- **Dual-UUID + Dual-PHY (`LE 1M` + `LE Coded PHY`) Native BLE Engine:** Simultaneous scanning of SIG `0xFDBB`, `AUTH_SERVICE_UUID` (`8f65073d-...`), and legacy `1d944db4-...` GATT services, OS-connected/bonded GATT hydration, `MTU 255` negotiation, `"Profoto Client"` session authentication, and out-of-band `FIRE` priority dispatch.
 - **Hard Bootloader / DFU Quarantine:** Compile-time and runtime blocklists prevent any read/write access to firmware-update GATT UUIDs (`f7bf3564-...`) or DFU opcodes (`46`, `142`, `154`).
 - **Zero Trackers / 100% Offline:** No `INTERNET` permission, no analytics, no proprietary SDKs, and no simulator code in release builds.
 

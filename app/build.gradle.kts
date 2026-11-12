@@ -37,8 +37,8 @@ android {
         applicationId = "app.prft.lightctrl"
         minSdk = 31
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.4.0"
+        versionCode = 6
+        versionName = "1.5.0"
     }
 
     signingConfigs {
@@ -124,4 +124,6 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
+    testImplementation("org.json:json:20240303")
 }

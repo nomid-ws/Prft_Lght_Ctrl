@@ -110,11 +110,16 @@ object PupOpcodes {
     const val SYNC_MODE = 140
     const val BLOB_DATA_QUARANTINED = 142
     const val REMOTE_MODE = 144
+    const val RMI_RF_POWER = 147
+    const val RADIO_MODE_RANGE = 148
     const val ARM_FW_UPDATE_QUARANTINED = 154
+    const val AIR_SYNC_MODE = 156
     const val AF_ASSIST_MODE = 160
     const val ZOOM_MODE = 161
     const val ZOOM_RANGE = 162
     const val ZOOM_VALUE = 163
+    const val READY_SIGNAL_MODE = 217
+    const val CCT_OUTPUT_MODE = 217
 
     // Recycle, Misfire & AirX Multi-Group Control
     const val FLASH_SCHEDULING_RECEIVED_EVT = 169
@@ -285,5 +290,63 @@ enum class FlashFiredError(val code: Int, val description: String) {
     companion object {
         fun fromCode(code: Int): FlashFiredError? =
             entries.firstOrNull { it.code == code }
+    }
+}
+
+enum class SyncTriggerMode(val code: Int, val label: String) {
+    FIRST(0, "1st Curtain"),
+    SECOND(1, "2nd Curtain"),
+    X_SYNC(2, "X-Sync"),
+    AUTO_FP(3, "Auto FP / HSS"),
+    GLOBAL_SHUTTER(4, "Global Shutter");
+
+    companion object {
+        fun fromCode(code: Int): SyncTriggerMode =
+            entries.firstOrNull { it.code == code } ?: FIRST
+    }
+}
+
+enum class AfAssistMode(val code: Int, val label: String) {
+    OFF(0, "Off"),
+    AUTO(1, "Auto"),
+    ON(2, "On");
+
+    companion object {
+        fun fromCode(code: Int): AfAssistMode =
+            entries.firstOrNull { it.code == code } ?: OFF
+    }
+}
+
+enum class RfPowerLevel(val code: Int, val label: String) {
+    P1(1, "P1"),
+    P2(2, "P2"),
+    P3(3, "P3"),
+    P4(4, "P4");
+
+    companion object {
+        fun fromCode(code: Int): RfPowerLevel =
+            entries.firstOrNull { it.code == code } ?: P4
+    }
+}
+
+enum class ReadySignalMode(val code: Int, val label: String) {
+    OFF(0, "Off"),
+    SOUND(1, "Sound"),
+    DIM(2, "Dim"),
+    SOUND_AND_DIM(3, "Sound & Dim");
+
+    companion object {
+        fun fromCode(code: Int): ReadySignalMode =
+            entries.firstOrNull { it.code == code } ?: SOUND
+    }
+}
+
+enum class MonolightZoomMode(val code: Int, val label: String) {
+    MANUAL(0, "Manual"),
+    AUTO(1, "Auto");
+
+    companion object {
+        fun fromCode(code: Int): MonolightZoomMode =
+            entries.firstOrNull { it.code == code } ?: AUTO
     }
 }

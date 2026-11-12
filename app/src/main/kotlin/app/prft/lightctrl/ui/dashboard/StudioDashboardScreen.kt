@@ -1,5 +1,6 @@
 package app.prft.lightctrl.ui.dashboard
 
+import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -11,15 +12,22 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -30,6 +38,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GridView
@@ -48,6 +57,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -61,11 +73,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.prft.lightctrl.BuildConfig
 import app.prft.lightctrl.ble.DiscoveredProfotoDevice
 import app.prft.lightctrl.domain.ConnectedProfotoUnit
@@ -79,10 +94,14 @@ import app.prft.lightctrl.ui.components.AboutAppSheet
 import app.prft.lightctrl.ui.components.ConnectProConsoleCard
 import app.prft.lightctrl.ui.components.ConnectTriggerCard
 import app.prft.lightctrl.ui.components.ContinuousLedControlCard
+import app.prft.lightctrl.ui.components.EquipmentManagerDeckView
+import app.prft.lightctrl.ui.components.GroupRolePickerDialog
 import app.prft.lightctrl.ui.components.MonolightControlCard
 import app.prft.lightctrl.ui.components.NicknameEditTarget
 import app.prft.lightctrl.ui.components.NicknameEditorSheet
 import app.prft.lightctrl.ui.components.RemoteAirModelingCard
+import app.prft.lightctrl.ui.components.RemoteSettingsSheet
+import app.prft.lightctrl.ui.components.StudioScenesSheet
 import app.prft.lightctrl.ui.components.VerticalGroupFaderBank
 import app.prft.lightctrl.ui.theme.StudioColors
 
@@ -122,6 +141,12 @@ fun StudioDashboardScreen(
     val currentTab = StudioNavTab.entries[currentTabOrdinal.coerceIn(0, StudioNavTab.entries.lastIndex)]
     var nicknameTarget by remember { mutableStateOf<NicknameEditTarget?>(null) }
     var showAboutSheet by rememberSaveable { mutableStateOf(false) }
+    var showScenesSheet by rememberSaveable { mutableStateOf(false) }
+    var editingGroupRole by remember { mutableStateOf<AirGroup?>(null) }
+    var remoteSettingsTarget by remember { mutableStateOf<ConnectedProfotoUnit?>(null) }
+
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     val openUnitNicknameEditor: (ConnectedProfotoUnit) -> Unit = { unit ->
         nicknameTarget = NicknameEditTarget(
@@ -142,101 +167,201 @@ fun StudioDashboardScreen(
         )
     }
 
-    Scaffold(
-        containerColor = StudioColors.CanvasBase,
-        topBar = {
-            PassiveTopStatusBar(
-                state = state,
-                hasBlePermissions = hasBlePermissions,
-                allowSimulator = allowSimulator,
-                onOpenAbout = { showAboutSheet = true },
-                onDismissBanner = viewModel::dismissBanner,
-            )
-        },
-        bottomBar = {
-            ThumbZoneBottomDock(
+    val onPrimaryCtaAction: () -> Unit = {
+        if (!hasBlePermissions) {
+            onRequestBlePermissions()
+        } else if (currentTab == StudioNavTab.DEVICES || state.activeReadyCount == 0) {
+            currentTabOrdinal = StudioNavTab.DEVICES.ordinal
+            if (state.isScanning) viewModel.stopScan() else viewModel.startScan()
+        } else {
+            viewModel.triggerMasterTestFlash()
+        }
+    }
+
+    if (isLandscape) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(StudioColors.CanvasBase),
+        ) {
+            LandscapeSideDock(
                 state = state,
                 currentTab = currentTab,
                 hasBlePermissions = hasBlePermissions,
                 onSelectTab = { currentTabOrdinal = it.ordinal },
-                onPrimaryCta = {
-                    if (!hasBlePermissions) {
-                        onRequestBlePermissions()
-                    } else if (currentTab == StudioNavTab.DEVICES || state.activeReadyCount == 0) {
-                        currentTabOrdinal = StudioNavTab.DEVICES.ordinal
-                        if (state.isScanning) viewModel.stopScan() else viewModel.startScan()
-                    } else {
-                        viewModel.triggerMasterTestFlash()
-                    }
-                },
+                onPrimaryCta = onPrimaryCtaAction,
             )
-        },
-    ) { innerPadding ->
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-        ) {
-            val isWideInnerScreen = maxWidth >= 600.dp
-            val edgeMargin = if (isWideInnerScreen) 24.dp else 16.dp
 
-            when (currentTab) {
-                StudioNavTab.GROUPS -> VerticalGroupFaderBank(
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .navigationBarsPadding()
+                    .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.End)),
+            ) {
+                PassiveTopStatusBar(
                     state = state,
-                    edgeMargin = edgeMargin,
-                    onMasterAllTrim = { delta -> viewModel.trimStudioGroup(AirGroup.ALL, delta) },
-                    onGroupPowerChange = { grp, tenths -> viewModel.setStudioGroupPower(grp, tenths) },
-                    onGroupMuteToggle = { grp -> viewModel.toggleStudioGroupMute(grp) },
-                    onRemoteChannelChange = { addr, ch -> viewModel.setAirChannel(addr, ch) },
-                    onRemoteToggleMode = { remote ->
-                        if (remote.archetype == DeviceArchetype.CONNECT_PRO_REMOTE) {
-                            val next = if (remote.flashMode == FlashMode.MANUAL) FlashMode.TTL else FlashMode.MANUAL
-                            viewModel.setFlashMode(remote.address, next)
-                        } else {
-                            val next = when (remote.remoteMode) {
-                                RemoteOperatingMode.AUTO_TTL -> RemoteOperatingMode.MANUAL
-                                RemoteOperatingMode.MANUAL -> RemoteOperatingMode.OFF
-                                RemoteOperatingMode.OFF -> RemoteOperatingMode.AUTO_TTL
-                            }
-                            viewModel.setConnectMode(remote.address, next)
-                        }
-                    },
-                )
-                StudioNavTab.LIGHTS -> OrganizedLightsDeckView(
-                    state = state,
-                    isWideScreen = isWideInnerScreen,
-                    edgeMargin = edgeMargin,
-                    hasBlePermissions = hasBlePermissions,
-                    onOpenScanner = {
-                        currentTabOrdinal = StudioNavTab.DEVICES.ordinal
-                        if (hasBlePermissions) viewModel.startScan() else onRequestBlePermissions()
-                    },
-                    onEditNickname = openUnitNicknameEditor,
-                    viewModel = viewModel,
-                )
-                StudioNavTab.LED -> ContinuousLedDeckView(
-                    state = state,
-                    isWideScreen = isWideInnerScreen,
-                    edgeMargin = edgeMargin,
-                    hasBlePermissions = hasBlePermissions,
-                    onOpenScanner = {
-                        currentTabOrdinal = StudioNavTab.DEVICES.ordinal
-                        if (hasBlePermissions) viewModel.startScan() else onRequestBlePermissions()
-                    },
-                    onEditNickname = openUnitNicknameEditor,
-                    viewModel = viewModel,
-                )
-                StudioNavTab.DEVICES -> EquipmentManagerDeckView(
-                    state = state,
-                    edgeMargin = edgeMargin,
                     hasBlePermissions = hasBlePermissions,
                     allowSimulator = allowSimulator,
-                    onRequestPermissions = onRequestBlePermissions,
-                    onEditConnectedNickname = openUnitNicknameEditor,
-                    onEditScannedNickname = openScannedNicknameEditor,
+                    isLandscape = true,
                     onOpenAbout = { showAboutSheet = true },
-                    viewModel = viewModel,
+                    onOpenPresets = { showScenesSheet = true },
+                    onDismissBanner = viewModel::dismissBanner,
                 )
+
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                ) {
+                    val isWideInnerScreen = maxWidth >= 600.dp
+                    val edgeMargin = if (isWideInnerScreen) 24.dp else 16.dp
+
+                    when (currentTab) {
+                        StudioNavTab.GROUPS -> VerticalGroupFaderBank(
+                            state = state,
+                            edgeMargin = edgeMargin,
+                            isLandscape = true,
+                            onMasterAllTrim = { delta -> viewModel.trimStudioGroup(AirGroup.ALL, delta) },
+                            onGroupPowerChange = { grp, tenths -> viewModel.setStudioGroupPower(grp, tenths) },
+                            onGroupMuteToggle = { grp -> viewModel.toggleStudioGroupMute(grp) },
+                            onRemoteChannelChange = { addr, ch -> viewModel.setAirChannel(addr, ch) },
+                            onRemoteToggleMode = { remote ->
+                                if (remote.archetype == DeviceArchetype.CONNECT_PRO_REMOTE) {
+                                    val isTtl = remote.remoteMode == RemoteOperatingMode.AUTO_TTL || remote.flashMode == FlashMode.TTL
+                                    val next = if (isTtl) RemoteOperatingMode.MANUAL else RemoteOperatingMode.AUTO_TTL
+                                    viewModel.setConnectMode(remote.address, next)
+                                }
+                            },
+                            onEditGroupRole = { grp -> editingGroupRole = grp },
+                        )
+                        StudioNavTab.LIGHTS -> OrganizedLightsDeckView(
+                            state = state,
+                            isWideScreen = isWideInnerScreen,
+                            edgeMargin = edgeMargin,
+                            hasBlePermissions = hasBlePermissions,
+                            onOpenScanner = {
+                                currentTabOrdinal = StudioNavTab.DEVICES.ordinal
+                                if (hasBlePermissions) viewModel.startScan() else onRequestBlePermissions()
+                            },
+                            onEditNickname = openUnitNicknameEditor,
+                            onOpenRemoteSettings = { unit -> remoteSettingsTarget = unit },
+                            viewModel = viewModel,
+                        )
+                        StudioNavTab.LED -> ContinuousLedDeckView(
+                            state = state,
+                            isWideScreen = isWideInnerScreen,
+                            edgeMargin = edgeMargin,
+                            hasBlePermissions = hasBlePermissions,
+                            onOpenScanner = {
+                                currentTabOrdinal = StudioNavTab.DEVICES.ordinal
+                                if (hasBlePermissions) viewModel.startScan() else onRequestBlePermissions()
+                            },
+                            onEditNickname = openUnitNicknameEditor,
+                            viewModel = viewModel,
+                        )
+                        StudioNavTab.DEVICES -> EquipmentManagerDeckView(
+                            state = state,
+                            edgeMargin = edgeMargin,
+                            hasBlePermissions = hasBlePermissions,
+                            allowSimulator = allowSimulator,
+                            onRequestPermissions = onRequestBlePermissions,
+                            onEditConnectedNickname = openUnitNicknameEditor,
+                            onEditScannedNickname = openScannedNicknameEditor,
+                            onOpenAbout = { showAboutSheet = true },
+                            viewModel = viewModel,
+                        )
+                    }
+                }
+            }
+        }
+    } else {
+        Scaffold(
+            containerColor = StudioColors.CanvasBase,
+            topBar = {
+                PassiveTopStatusBar(
+                    state = state,
+                    hasBlePermissions = hasBlePermissions,
+                    allowSimulator = allowSimulator,
+                    isLandscape = false,
+                    onOpenAbout = { showAboutSheet = true },
+                    onOpenPresets = { showScenesSheet = true },
+                    onDismissBanner = viewModel::dismissBanner,
+                )
+            },
+            bottomBar = {
+                ThumbZoneBottomDock(
+                    state = state,
+                    currentTab = currentTab,
+                    hasBlePermissions = hasBlePermissions,
+                    onSelectTab = { currentTabOrdinal = it.ordinal },
+                    onPrimaryCta = onPrimaryCtaAction,
+                )
+            },
+        ) { innerPadding ->
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+            ) {
+                val isWideInnerScreen = maxWidth >= 600.dp
+                val edgeMargin = if (isWideInnerScreen) 24.dp else 16.dp
+
+                when (currentTab) {
+                    StudioNavTab.GROUPS -> VerticalGroupFaderBank(
+                        state = state,
+                        edgeMargin = edgeMargin,
+                        isLandscape = false,
+                        onMasterAllTrim = { delta -> viewModel.trimStudioGroup(AirGroup.ALL, delta) },
+                        onGroupPowerChange = { grp, tenths -> viewModel.setStudioGroupPower(grp, tenths) },
+                        onGroupMuteToggle = { grp -> viewModel.toggleStudioGroupMute(grp) },
+                        onRemoteChannelChange = { addr, ch -> viewModel.setAirChannel(addr, ch) },
+                        onRemoteToggleMode = { remote ->
+                            if (remote.archetype == DeviceArchetype.CONNECT_PRO_REMOTE) {
+                                val isTtl = remote.remoteMode == RemoteOperatingMode.AUTO_TTL || remote.flashMode == FlashMode.TTL
+                                val next = if (isTtl) RemoteOperatingMode.MANUAL else RemoteOperatingMode.AUTO_TTL
+                                viewModel.setConnectMode(remote.address, next)
+                            }
+                        },
+                        onEditGroupRole = { grp -> editingGroupRole = grp },
+                    )
+                    StudioNavTab.LIGHTS -> OrganizedLightsDeckView(
+                        state = state,
+                        isWideScreen = isWideInnerScreen,
+                        edgeMargin = edgeMargin,
+                        hasBlePermissions = hasBlePermissions,
+                        onOpenScanner = {
+                            currentTabOrdinal = StudioNavTab.DEVICES.ordinal
+                            if (hasBlePermissions) viewModel.startScan() else onRequestBlePermissions()
+                        },
+                        onEditNickname = openUnitNicknameEditor,
+                        onOpenRemoteSettings = { unit -> remoteSettingsTarget = unit },
+                        viewModel = viewModel,
+                    )
+                    StudioNavTab.LED -> ContinuousLedDeckView(
+                        state = state,
+                        isWideScreen = isWideInnerScreen,
+                        edgeMargin = edgeMargin,
+                        hasBlePermissions = hasBlePermissions,
+                        onOpenScanner = {
+                            currentTabOrdinal = StudioNavTab.DEVICES.ordinal
+                            if (hasBlePermissions) viewModel.startScan() else onRequestBlePermissions()
+                        },
+                        onEditNickname = openUnitNicknameEditor,
+                        viewModel = viewModel,
+                    )
+                    StudioNavTab.DEVICES -> EquipmentManagerDeckView(
+                        state = state,
+                        edgeMargin = edgeMargin,
+                        hasBlePermissions = hasBlePermissions,
+                        allowSimulator = allowSimulator,
+                        onRequestPermissions = onRequestBlePermissions,
+                        onEditConnectedNickname = openUnitNicknameEditor,
+                        onEditScannedNickname = openScannedNicknameEditor,
+                        onOpenAbout = { showAboutSheet = true },
+                        viewModel = viewModel,
+                    )
+                }
             }
         }
     }
@@ -255,6 +380,46 @@ fun StudioDashboardScreen(
             onDismiss = { showAboutSheet = false },
         )
     }
+
+    editingGroupRole?.let { grp ->
+        GroupRolePickerDialog(
+            group = grp,
+            currentRole = state.groupRoles[grp],
+            onSaveRole = { role -> viewModel.setGroupRole(grp, role) },
+            onDismiss = { editingGroupRole = null },
+        )
+    }
+
+    remoteSettingsTarget?.let { remoteUnit ->
+        val liveUnit = state.connectedUnits.firstOrNull { it.address == remoteUnit.address } ?: remoteUnit
+        RemoteSettingsSheet(
+            unit = liveUnit,
+            onSyncModeChange = { mode -> viewModel.setRemoteSyncMode(liveUnit.address, mode) },
+            onAfAssistChange = { af -> viewModel.setRemoteAfAssist(liveUnit.address, af) },
+            onRfPowerChange = { rf -> viewModel.setRemoteRfPower(liveUnit.address, rf) },
+            onSleepTimeoutChange = { mins -> viewModel.setRemoteSleepTimeout(liveUnit.address, mins) },
+            onBrightnessChange = { b -> viewModel.setRemoteBrightness(liveUnit.address, b) },
+            onBatteryTypeChange = { chem -> viewModel.setRemoteBatteryType(liveUnit.address, chem) },
+            onSoundsToggle = { snd -> viewModel.setRemoteSounds(liveUnit.address, snd) },
+            onChannelChange = { ch -> viewModel.setAirChannel(liveUnit.address, ch) },
+            onDismiss = { remoteSettingsTarget = null },
+        )
+    }
+
+    if (showScenesSheet) {
+        val savedScenes by viewModel.savedScenes.collectAsStateWithLifecycle()
+        StudioScenesSheet(
+            savedScenes = savedScenes,
+            onSaveCurrentScene = { name, notes ->
+                val scene = viewModel.captureCurrentScene(name, notes)
+                viewModel.saveScene(scene)
+            },
+            onApplyScene = { scene -> viewModel.applyScene(scene) },
+            onDeleteScene = { id -> viewModel.deleteScene(id) },
+            onImportScenes = { list -> viewModel.importScenes(list) },
+            onDismiss = { showScenesSheet = false },
+        )
+    }
 }
 
 @Composable
@@ -262,49 +427,88 @@ private fun PassiveTopStatusBar(
     state: StudioDashboardState,
     hasBlePermissions: Boolean,
     allowSimulator: Boolean,
+    isLandscape: Boolean = false,
     onOpenAbout: () -> Unit,
+    onOpenPresets: () -> Unit = {},
     onDismissBanner: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(StudioColors.CanvasBase)
-            .statusBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
+    if (isLandscape) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(StudioColors.CanvasBase)
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 0.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
                     text = "Prft Light Ctrl",
-                    style = MaterialTheme.typography.headlineSmall,
+                    style = MaterialTheme.typography.titleSmall,
                     color = StudioColors.TextPrimary,
+                    maxLines = 1,
+                )
+                Text(
+                    text = "·",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = StudioColors.TextSecondary,
                 )
                 Text(
                     text = when {
                         !hasBlePermissions -> "BLE permission required"
-                        !state.isBluetoothEnabled -> "Bluetooth radio OFF"
+                        !state.isBluetoothEnabled -> "BT OFF"
                         state.activeReadyCount > 0 -> {
                             val names = state.connectedUnits
                                 .filter { it.isReady }
                                 .joinToString(", ") { it.displayTitle }
                             "${state.activeReadyCount} linked · $names"
                         }
-                        state.isScanning -> "Scanning Profoto AirX & AirTTL BLE..."
-                        else -> "Disconnected · Ready to scan"
+                        state.isScanning -> "Scanning..."
+                        else -> "Disconnected"
                     },
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     color = if (state.activeReadyCount > 0) StudioColors.TextPrimary else StudioColors.TextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
 
-            Spacer(modifier = Modifier.size(8.dp))
+            state.statusBanner?.let { banner ->
+                Row(
+                    modifier = Modifier
+                        .background(StudioColors.SheetElevated, RoundedCornerShape(6.dp))
+                        .border(0.5.dp, StudioColors.SubtleOutline, RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = banner,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = StudioColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 220.dp),
+                    )
+                    IconButton(
+                        onClick = onDismissBanner,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Dismiss banner",
+                            modifier = Modifier.size(16.dp),
+                            tint = StudioColors.TextSecondary,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+            }
 
             val simActive = allowSimulator && state.benchSimulatorEnabled
             val linkedActive = state.activeReadyCount > 0
@@ -316,26 +520,39 @@ private fun PassiveTopStatusBar(
                     modifier = Modifier
                         .background(
                             color = if (linkedActive) StudioColors.TextPrimary else StudioColors.CardSurface,
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(6.dp),
                         )
                         .border(
                             width = 1.dp,
                             color = if (linkedActive || simActive) StudioColors.TextPrimary else StudioColors.SubtleOutline,
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(6.dp),
                         )
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
                 ) {
                     Text(
                         text = when {
-                            simActive -> "SIM LAB"
+                            simActive -> "SIM"
                             linkedActive -> "LINKED (${state.activeReadyCount})"
                             else -> "LIVE BLE"
                         },
-                        style = MaterialTheme.typography.labelMedium.copy(
+                        style = MaterialTheme.typography.labelSmall.copy(
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp,
                         ),
                         color = if (linkedActive) StudioColors.CanvasBase else StudioColors.TextPrimary,
+                    )
+                }
+
+                IconButton(
+                    onClick = onOpenPresets,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.BookmarkBorder,
+                        contentDescription = "Presets",
+                        tint = StudioColors.TextSecondary,
+                        modifier = Modifier.size(18.dp),
                     )
                 }
 
@@ -347,33 +564,134 @@ private fun PassiveTopStatusBar(
                         imageVector = Icons.Outlined.Info,
                         contentDescription = "About Prft Light Ctrl",
                         tint = StudioColors.TextSecondary,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(18.dp),
                     )
                 }
             }
         }
-
-        state.statusBanner?.let { msg ->
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(StudioColors.CanvasBase)
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(StudioColors.SheetElevated, RoundedCornerShape(10.dp))
-                    .border(1.dp, StudioColors.SubtleOutline, RoundedCornerShape(10.dp))
-                    .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = msg,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = StudioColors.TextPrimary,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(
-                    onClick = onDismissBanner,
-                    modifier = Modifier.size(48.dp),
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Prft Light Ctrl",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = StudioColors.TextPrimary,
+                    )
+                    Text(
+                        text = when {
+                            !hasBlePermissions -> "BLE permission required"
+                            !state.isBluetoothEnabled -> "Bluetooth radio OFF"
+                            state.activeReadyCount > 0 -> {
+                                val names = state.connectedUnits
+                                    .filter { it.isReady }
+                                    .joinToString(", ") { it.displayTitle }
+                                "${state.activeReadyCount} linked · $names"
+                            }
+                            state.isScanning -> "Scanning Profoto AirX & AirTTL BLE..."
+                            else -> "Disconnected · Ready to scan"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (state.activeReadyCount > 0) StudioColors.TextPrimary else StudioColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                Spacer(modifier = Modifier.size(8.dp))
+
+                val simActive = allowSimulator && state.benchSimulatorEnabled
+                val linkedActive = state.activeReadyCount > 0
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = "Dismiss banner")
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                color = if (linkedActive) StudioColors.TextPrimary else StudioColors.CardSurface,
+                                shape = RoundedCornerShape(8.dp),
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = if (linkedActive || simActive) StudioColors.TextPrimary else StudioColors.SubtleOutline,
+                                shape = RoundedCornerShape(8.dp),
+                            )
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            text = when {
+                                simActive -> "SIM LAB"
+                                linkedActive -> "LINKED (${state.activeReadyCount})"
+                                else -> "LIVE BLE"
+                            },
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                            ),
+                            color = if (linkedActive) StudioColors.CanvasBase else StudioColors.TextPrimary,
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onOpenPresets,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BookmarkBorder,
+                            contentDescription = "Studio Presets & Scenes",
+                            tint = StudioColors.TextSecondary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onOpenAbout,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Info,
+                            contentDescription = "About Prft Light Ctrl",
+                            tint = StudioColors.TextSecondary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            }
+
+            state.statusBanner?.let { msg ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(StudioColors.SheetElevated, RoundedCornerShape(10.dp))
+                        .border(1.dp, StudioColors.SubtleOutline, RoundedCornerShape(10.dp))
+                        .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = StudioColors.TextPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = onDismissBanner,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Dismiss banner")
+                    }
                 }
             }
         }
@@ -466,6 +784,7 @@ private fun OrganizedLightsDeckView(
     hasBlePermissions: Boolean,
     onOpenScanner: () -> Unit,
     onEditNickname: (ConnectedProfotoUnit) -> Unit,
+    onOpenRemoteSettings: (ConnectedProfotoUnit) -> Unit = {},
     viewModel: StudioViewModel,
 ) {
     if (state.connectedUnits.isEmpty()) {
@@ -519,7 +838,13 @@ private fun OrganizedLightsDeckView(
                     )
                 }
                 items(remotes, key = { "rem_${it.address}" }) { unit ->
-                    UnitCardRouter(unit = unit, onEditNickname = { onEditNickname(unit) }, viewModel = viewModel)
+                    UnitCardRouter(
+                        unit = unit,
+                        state = state,
+                        onEditNickname = { onEditNickname(unit) },
+                        onOpenRemoteSettings = onOpenRemoteSettings,
+                        viewModel = viewModel,
+                    )
                 }
             }
 
@@ -547,7 +872,13 @@ private fun OrganizedLightsDeckView(
                     }
                 } else {
                     items(members, key = { it.address }) { unit ->
-                        UnitCardRouter(unit = unit, onEditNickname = { onEditNickname(unit) }, viewModel = viewModel)
+                        UnitCardRouter(
+                            unit = unit,
+                            state = state,
+                            onEditNickname = { onEditNickname(unit) },
+                            onOpenRemoteSettings = onOpenRemoteSettings,
+                            viewModel = viewModel,
+                        )
                     }
                 }
             }
@@ -574,7 +905,13 @@ private fun OrganizedLightsDeckView(
                     )
                 }
                 items(remotes, key = { "rem_${it.address}" }) { unit ->
-                    UnitCardRouter(unit = unit, onEditNickname = { onEditNickname(unit) }, viewModel = viewModel)
+                    UnitCardRouter(
+                        unit = unit,
+                        state = state,
+                        onEditNickname = { onEditNickname(unit) },
+                        onOpenRemoteSettings = onOpenRemoteSettings,
+                        viewModel = viewModel,
+                    )
                 }
             }
 
@@ -602,7 +939,13 @@ private fun OrganizedLightsDeckView(
                     }
                 } else {
                     items(members, key = { it.address }) { unit ->
-                        UnitCardRouter(unit = unit, onEditNickname = { onEditNickname(unit) }, viewModel = viewModel)
+                        UnitCardRouter(
+                            unit = unit,
+                            state = state,
+                            onEditNickname = { onEditNickname(unit) },
+                            onOpenRemoteSettings = onOpenRemoteSettings,
+                            viewModel = viewModel,
+                        )
                     }
                 }
             }
@@ -818,40 +1161,51 @@ private fun GroupFilterChipBar(
 @Composable
 private fun UnitCardRouter(
     unit: ConnectedProfotoUnit,
+    state: StudioDashboardState,
     onEditNickname: () -> Unit,
+    onOpenRemoteSettings: (ConnectedProfotoUnit) -> Unit = {},
     viewModel: StudioViewModel,
 ) {
     when (unit.archetype) {
         DeviceArchetype.CONNECT_PRO_REMOTE -> ConnectProConsoleCard(
             unit = unit,
+            groupRoles = state.groupRoles,
+            isDualPowerReadoutEnabled = state.isDualPowerReadoutEnabled,
+            onOperatingModeChange = { viewModel.setConnectMode(unit.address, it) },
             onFlashModeChange = { viewModel.setFlashMode(unit.address, it) },
             onAirProtocolChange = { viewModel.setAirProtocol(unit.address, it) },
             onAirChannelChange = { viewModel.setAirChannel(unit.address, it) },
             onTtlEvChange = { viewModel.setTtlEvComp(unit.address, it) },
+            onGroupTtlBiasChange = { grp, v -> viewModel.setGroupTtlEvBias(unit.address, grp, v) },
             onGroupPowerChange = { idx, v -> viewModel.setConnectProGroupPower(unit.address, idx, v) },
             onGroupMuteToggle = { idx -> viewModel.toggleConnectProGroupMute(unit.address, idx) },
             onGroupModelingToggle = { idx -> viewModel.toggleConnectProGroupModeling(unit.address, idx) },
             onAllGroupsTrim = { delta -> viewModel.stepRemoteGroupTrim(unit.address, AirGroup.ALL, delta) },
             onTestFlash = { viewModel.triggerUnitTestFlash(unit.address) },
             onEditNickname = onEditNickname,
+            onOpenRemoteSettings = { onOpenRemoteSettings(unit) },
             onRetryConnect = { viewModel.retryConnect(unit.address) },
             onDisconnect = { viewModel.disconnect(unit.address) },
         )
         DeviceArchetype.CONNECT_REMOTE -> ConnectTriggerCard(
             unit = unit,
+            groupRoles = state.groupRoles,
             onModeChange = { viewModel.setConnectMode(unit.address, it) },
             onTtlEvChange = { viewModel.setTtlEvComp(unit.address, it) },
+            onGroupTtlBiasChange = { grp, v -> viewModel.setGroupTtlEvBias(unit.address, grp, v) },
             onAirChannelChange = { viewModel.setAirChannel(unit.address, it) },
             onRelativeGroupTrim = { grp, delta -> viewModel.stepRemoteGroupTrim(unit.address, grp, delta) },
             onGroupMuteToggle = { idx -> viewModel.toggleConnectProGroupMute(unit.address, idx) },
             onGroupModelingToggle = { idx -> viewModel.toggleConnectProGroupModeling(unit.address, idx) },
             onTestFlash = { viewModel.triggerUnitTestFlash(unit.address) },
             onEditNickname = onEditNickname,
+            onOpenRemoteSettings = { onOpenRemoteSettings(unit) },
             onRetryConnect = { viewModel.retryConnect(unit.address) },
             onDisconnect = { viewModel.disconnect(unit.address) },
         )
         else -> MonolightControlCard(
             unit = unit,
+            isDualPowerReadoutEnabled = state.isDualPowerReadoutEnabled,
             onPowerChange = { viewModel.setFlashPower(unit.address, it) },
             onHeadToggle = { viewModel.setHeadOn(unit.address, it) },
             onFreezeToggle = { viewModel.setFreeze(unit.address, it) },
@@ -860,6 +1214,8 @@ private fun UnitCardRouter(
             onVideoIntensityPercent = { viewModel.setVideoIntensityPct(unit.address, it) },
             onVideoKelvin = { viewModel.setVideoKelvin(unit.address, it) },
             onVideoMode = { viewModel.setVideoMode(unit.address, it) },
+            onZoomChange = { mode, pos -> viewModel.setMonolightZoom(unit.address, mode, pos) },
+            onReadySignalModeChange = { mode -> viewModel.setReadySignalMode(unit.address, mode) },
             onAirGroupChange = { viewModel.setAirGroup(unit.address, it) },
             onAirChannelChange = { viewModel.setAirChannel(unit.address, it) },
             onCaptureVideoPriority = { viewModel.setCaptureVideoPriority(unit.address, it) },
@@ -875,342 +1231,112 @@ private fun UnitCardRouter(
     }
 }
 
-/**
- * Equipment Manager & BLE Scanner Deck:
- * - Section 1: Connected Equipment (displayed by Nickname with Hardware Model permanently visible).
- * - Section 2: Nearby Profoto BLE Peripherals (resolved via 0xFDBB Product ID + persistent Nicknames).
- */
 @Composable
-private fun EquipmentManagerDeckView(
+private fun LandscapeSideDock(
     state: StudioDashboardState,
-    edgeMargin: Dp,
+    currentTab: StudioNavTab,
     hasBlePermissions: Boolean,
-    allowSimulator: Boolean,
-    onRequestPermissions: () -> Unit,
-    onEditConnectedNickname: (ConnectedProfotoUnit) -> Unit,
-    onEditScannedNickname: (DiscoveredProfotoDevice) -> Unit,
-    onOpenAbout: () -> Unit,
-    viewModel: StudioViewModel,
+    onSelectTab: (StudioNavTab) -> Unit,
+    onPrimaryCta: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val connectedAddresses = state.connectedUnits.map { it.address }.toSet()
-    val nearbyUnconnected = state.scannedDevices.filter { it.address !in connectedAddresses }
+    val navItemColors = NavigationRailItemDefaults.colors(
+        indicatorColor = StudioColors.TextPrimary,
+        selectedIconColor = StudioColors.CanvasBase,
+        selectedTextColor = StudioColors.TextPrimary,
+        unselectedIconColor = StudioColors.TextSecondary,
+        unselectedTextColor = StudioColors.TextSecondary,
+    )
 
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = edgeMargin, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxSize(),
+    NavigationRail(
+        containerColor = StudioColors.SheetElevated,
+        modifier = modifier
+            .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Start))
+            .width(80.dp)
+            .border(width = 0.5.dp, color = StudioColors.SubtleOutline)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+        header = {
+            Spacer(modifier = Modifier.height(4.dp))
+        },
     ) {
-        if (!hasBlePermissions) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = StudioColors.CardSurface),
-                    shape = RoundedCornerShape(16.dp),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Text("Bluetooth Scan & Connect Permission Needed", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Android 12+ requires nearby-device Bluetooth permission (without location tracking) to discover Profoto strobes and remotes.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = StudioColors.TextSecondary,
-                        )
-                        FilledTonalButton(
-                            onClick = onRequestPermissions,
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        ) {
-                            Text("Grant Nearby Devices Permission")
-                        }
-                    }
-                }
-            }
-        }
-
-        // Debug-only Lab Bench Simulator (stripped completely from Release builds)
-        if (allowSimulator) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = StudioColors.CardSurface),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Virtual Kit Simulator (Debug Only)", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Advertises virtual B10X Plus, A2, Connect Pro & Connect through full PUP GATT handshake",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = StudioColors.TextSecondary,
-                            )
-                        }
-                        Switch(
-                            checked = state.benchSimulatorEnabled,
-                            onCheckedChange = viewModel::setBenchSimulator,
-                            modifier = Modifier.size(width = 56.dp, height = 48.dp),
-                        )
-                    }
-                }
-            }
-        }
-
-        if (state.connectedUnits.isNotEmpty()) {
-            item {
-                StudioSectionHeader(
-                    title = "CONNECTED EQUIPMENT (${state.connectedUnits.size})",
-                    subtitle = "${state.activeReadyCount} READY",
+        Column(
+            modifier = Modifier.fillMaxHeight(),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                NavigationRailItem(
+                    selected = currentTab == StudioNavTab.GROUPS,
+                    onClick = { onSelectTab(StudioNavTab.GROUPS) },
+                    icon = { Icon(Icons.Default.GridView, contentDescription = "Groups") },
+                    label = { Text("Groups", maxLines = 1) },
+                    colors = navItemColors,
+                )
+                NavigationRailItem(
+                    selected = currentTab == StudioNavTab.LIGHTS,
+                    onClick = { onSelectTab(StudioNavTab.LIGHTS) },
+                    icon = { Icon(Icons.Default.Tune, contentDescription = "Lights") },
+                    label = { Text("Lights", maxLines = 1) },
+                    colors = navItemColors,
+                )
+                NavigationRailItem(
+                    selected = currentTab == StudioNavTab.LED,
+                    onClick = { onSelectTab(StudioNavTab.LED) },
+                    icon = { Icon(Icons.Default.LightMode, contentDescription = "LED") },
+                    label = { Text("LED", maxLines = 1) },
+                    colors = navItemColors,
+                )
+                NavigationRailItem(
+                    selected = currentTab == StudioNavTab.DEVICES,
+                    onClick = { onSelectTab(StudioNavTab.DEVICES) },
+                    icon = { Icon(Icons.AutoMirrored.Filled.BluetoothSearching, contentDescription = "Devices") },
+                    label = { Text("Devices", maxLines = 1) },
+                    colors = navItemColors,
                 )
             }
-            items(state.connectedUnits, key = { "conn_${it.address}" }) { unit ->
-                ConnectedEquipmentRow(
-                    unit = unit,
-                    onEditNickname = { onEditConnectedNickname(unit) },
-                    onRetry = { viewModel.retryConnect(unit.address) },
-                    onDisconnect = { viewModel.disconnect(unit.address) },
-                )
-            }
-        }
 
-        item {
-            StudioSectionHeader(
-                title = "NEARBY PROFOTO BLE (${nearbyUnconnected.size})",
-                subtitle = if (state.isScanning) "SCANNING" else "IDLE",
-            )
-        }
-
-        if (nearbyUnconnected.isEmpty()) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = StudioColors.CardSurface),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Text(
-                            text = when {
-                                state.isScanning -> "Listening for Profoto BLE Advertisements..."
-                                state.connectedUnits.isNotEmpty() -> "All discovered Profoto units are connected"
-                                else -> "Scanner Idle"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Text(
-                            text = "Tap Scan Profoto BLE below to discover Profoto Connect, Connect Pro, A2, and B10X Pro / B10 units.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = StudioColors.TextSecondary,
-                        )
-                    }
-                }
+            val ctaShortText = when {
+                !hasBlePermissions -> "BLE"
+                currentTab == StudioNavTab.DEVICES -> if (state.isScanning) "STOP" else "SCAN"
+                state.activeReadyCount == 0 -> "SCAN"
+                else -> "FIRE"
             }
-        } else {
-            items(nearbyUnconnected, key = { "scan_${it.address}" }) { dev ->
-                ScannedDeviceRow(
-                    device = dev,
-                    savedNickname = state.nicknameFor(dev.address),
-                    onEditNickname = { onEditScannedNickname(dev) },
-                    onConnect = { viewModel.connect(dev) },
-                )
-            }
-        }
 
-        // Unobtrusive About footer card at the very bottom of the Devices tab
-        item(key = "about_footer") {
-            Card(
-                onClick = onOpenAbout,
-                colors = CardDefaults.cardColors(containerColor = StudioColors.CardSurface),
-                shape = RoundedCornerShape(14.dp),
+            Button(
+                onClick = onPrimaryCta,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = StudioColors.FlashAmber,
+                    contentColor = StudioColors.OnFlashAmber,
+                ),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
                 modifier = Modifier
+                    .padding(horizontal = 6.dp, vertical = 8.dp)
                     .fillMaxWidth()
-                    .heightIn(min = 52.dp),
+                    .heightIn(min = 48.dp),
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "About Prft Light Ctrl",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = StudioColors.TextPrimary,
-                        )
-                        Text(
-                            text = "v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE}) · Supported Equipment & Safety",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = StudioColors.TextSecondary,
-                        )
-                    }
                     Icon(
-                        imageVector = Icons.Outlined.Info,
+                        imageVector = if (state.activeReadyCount > 0 && currentTab != StudioNavTab.DEVICES) {
+                            Icons.Default.Bolt
+                        } else {
+                            Icons.AutoMirrored.Filled.BluetoothSearching
+                        },
                         contentDescription = null,
-                        tint = StudioColors.TextSecondary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ConnectedEquipmentRow(
-    unit: ConnectedProfotoUnit,
-    onEditNickname: () -> Unit,
-    onRetry: () -> Unit,
-    onDisconnect: () -> Unit,
-) {
-    val batLabel = if (unit.chargerPluggedIn) "AC·${unit.batteryBars}/4" else "BAT ${unit.batteryBars}/4"
-    val roleSummary = when (unit.archetype) {
-        DeviceArchetype.CONNECT_PRO_REMOTE -> "Ch ${unit.airChannel} · ${unit.remoteMode.label} · $batLabel"
-        DeviceArchetype.CONNECT_REMOTE -> "Ch ${unit.airChannel} · ${unit.remoteMode.label} · $batLabel"
-        else -> "Grp ${unit.airGroup.label} · Ch ${unit.airChannel} · $batLabel"
-    }
-    val subtitle = if (unit.hasNickname) {
-        "${unit.hardwareModelName} · $roleSummary"
-    } else {
-        "${unit.modelSpec.ratedOutputLabel} · $roleSummary"
-    }
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = StudioColors.CardSurface),
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = unit.displayTitle,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = StudioColors.TextPrimary,
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = StudioColors.TextSecondary,
-                )
-                Text(
-                    text = if (unit.isReady) "LINKED · READY" else (unit.stage::class.simpleName ?: "Connecting"),
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                    color = if (unit.isReady) StudioColors.TextPrimary else StudioColors.TextSecondary,
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(
-                    onClick = onEditNickname,
-                    modifier = Modifier.size(48.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Edit nickname for ${unit.displayTitle}",
-                        tint = StudioColors.TextSecondary,
                         modifier = Modifier.size(18.dp),
                     )
-                }
-
-                if (unit.isFailed) {
-                    FilledTonalButton(
-                        onClick = onRetry,
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) {
-                        Text("Retry")
-                    }
-                } else {
-                    FilledTonalButton(
-                        onClick = onDisconnect,
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) {
-                        Text("Disconnect")
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ScannedDeviceRow(
-    device: DiscoveredProfotoDevice,
-    savedNickname: String?,
-    onEditNickname: () -> Unit,
-    onConnect: () -> Unit,
-) {
-    val spec = HardwareCatalog.resolve(device.advertisedProductId, device.advertisedName)
-    val hasNick = !savedNickname.isNullOrBlank()
-    val primaryTitle = if (hasNick) savedNickname!! else spec.marketingName
-    val subtitle = if (hasNick) {
-        "${spec.marketingName} · ${spec.ratedOutputLabel} · ${device.rssi} dBm"
-    } else {
-        "${spec.ratedOutputLabel} · ${device.advertisedName} · ${device.rssi} dBm"
-    }
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = StudioColors.CardSurface),
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = primaryTitle,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = StudioColors.TextPrimary,
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = StudioColors.TextSecondary,
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(
-                    onClick = onEditNickname,
-                    modifier = Modifier.size(48.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Edit nickname for $primaryTitle",
-                        tint = StudioColors.TextSecondary,
-                        modifier = Modifier.size(18.dp),
+                    Text(
+                        text = ctaShortText,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        maxLines = 1,
                     )
-                }
-                FilledTonalButton(
-                    onClick = onConnect,
-                    modifier = Modifier.heightIn(min = 48.dp),
-                ) {
-                    Text("Connect")
                 }
             }
         }
@@ -1253,7 +1379,7 @@ private fun ThumbZoneBottomDock(
                 !hasBlePermissions -> "ALLOW BLUETOOTH ACCESS"
                 currentTab == StudioNavTab.DEVICES -> if (state.isScanning) "STOP BLE SCAN" else "SCAN PROFOTO BLE"
                 state.activeReadyCount == 0 -> "SCAN PROFOTO BLE"
-                else -> "TEST STUDIO FLASH (${state.activeReadyCount})"
+                else -> "FIRE"
             }
 
             Button(

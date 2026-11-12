@@ -35,6 +35,7 @@ data class HardwareModelSpec(
     val supportsAcStandPower: Boolean = false,
     val maxAirChannelDefault: Int = 100,
     val usesLegacyV1Queries: Boolean = false,
+    val maxWattSeconds: Int? = null,
 )
 
 /**
@@ -61,6 +62,7 @@ object HardwareCatalog {
             supportsDisplayOrientation = false,
             supportsAcStandPower = false,
             maxAirChannelDefault = 100,
+            maxWattSeconds = 100,
         ),
 
         // B10 & B10X / B10X Pro / Plus Series (500 Ws & 250 Ws)
@@ -80,6 +82,7 @@ object HardwareCatalog {
             supportsDisplayOrientation = true,
             supportsAcStandPower = true,
             maxAirChannelDefault = 100,
+            maxWattSeconds = 500,
         ),
         HardwareModelSpec(
             productId = 144,
@@ -97,6 +100,7 @@ object HardwareCatalog {
             supportsDisplayOrientation = true,
             supportsAcStandPower = true,
             maxAirChannelDefault = 100,
+            maxWattSeconds = 250,
         ),
         HardwareModelSpec(
             productId = 140,
@@ -114,6 +118,7 @@ object HardwareCatalog {
             supportsDisplayOrientation = true,
             supportsAcStandPower = true,
             maxAirChannelDefault = 20,
+            maxWattSeconds = 250,
         ),
         HardwareModelSpec(
             productId = 141,
@@ -131,6 +136,7 @@ object HardwareCatalog {
             supportsDisplayOrientation = true,
             supportsAcStandPower = true,
             maxAirChannelDefault = 20,
+            maxWattSeconds = 500,
         ),
 
         // Profoto Connect Pro Remotes (161..166)
@@ -149,19 +155,19 @@ object HardwareCatalog {
         HardwareModelSpec(154, "Connect", "Profoto Connect (Fujifilm)", "AirTTL Remote", DeviceArchetype.CONNECT_REMOTE, maxAirChannelDefault = 8, usesLegacyV1Queries = true),
 
         // Additional Profoto Studio & Location Catalog
-        HardwareModelSpec(4, "Pro-11", "Profoto Pro-11", "2400 Ws", DeviceArchetype.PACK_GENERATOR, supportsIrSlave = true, supportsAcStandPower = true),
-        HardwareModelSpec(30, "A10", "Profoto A10", "76 Ws", DeviceArchetype.COMPACT_FLASH),
-        HardwareModelSpec(31, "A10", "Profoto A10 (Canon)", "76 Ws", DeviceArchetype.COMPACT_FLASH),
-        HardwareModelSpec(32, "A10", "Profoto A10 (Nikon)", "76 Ws", DeviceArchetype.COMPACT_FLASH),
-        HardwareModelSpec(33, "A10", "Profoto A10 (Sony)", "76 Ws", DeviceArchetype.COMPACT_FLASH),
-        HardwareModelSpec(35, "A10", "Profoto A10 (Fujifilm)", "76 Ws", DeviceArchetype.COMPACT_FLASH),
-        HardwareModelSpec(48, "Pro-D3", "Profoto Pro-D3", "AC Strobe", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true),
-        HardwareModelSpec(49, "Pro-D3 750", "Profoto Pro-D3 750", "750 Ws", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true),
-        HardwareModelSpec(50, "Pro-D3 1250", "Profoto Pro-D3 1250", "1250 Ws", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true),
-        HardwareModelSpec(51, "Pro-B3", "Profoto Pro-B3", "750 Ws", DeviceArchetype.PACK_GENERATOR, supportsBiColorCct = true),
-        HardwareModelSpec(52, "D30", "Profoto D30", "500 Ws", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true),
-        HardwareModelSpec(53, "B20", "Profoto B20", "250 Ws", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true),
-        HardwareModelSpec(54, "B30", "Profoto B30", "500 Ws", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true),
+        HardwareModelSpec(4, "Pro-11", "Profoto Pro-11", "2400 Ws", DeviceArchetype.PACK_GENERATOR, supportsIrSlave = true, supportsAcStandPower = true, maxWattSeconds = 2400),
+        HardwareModelSpec(30, "A10", "Profoto A10", "76 Ws", DeviceArchetype.COMPACT_FLASH, maxWattSeconds = 76),
+        HardwareModelSpec(31, "A10", "Profoto A10 (Canon)", "76 Ws", DeviceArchetype.COMPACT_FLASH, maxWattSeconds = 76),
+        HardwareModelSpec(32, "A10", "Profoto A10 (Nikon)", "76 Ws", DeviceArchetype.COMPACT_FLASH, maxWattSeconds = 76),
+        HardwareModelSpec(33, "A10", "Profoto A10 (Sony)", "76 Ws", DeviceArchetype.COMPACT_FLASH, maxWattSeconds = 76),
+        HardwareModelSpec(35, "A10", "Profoto A10 (Fujifilm)", "76 Ws", DeviceArchetype.COMPACT_FLASH, maxWattSeconds = 76),
+        HardwareModelSpec(48, "Pro-D3", "Profoto Pro-D3", "AC Strobe", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true, maxWattSeconds = 750),
+        HardwareModelSpec(49, "Pro-D3 750", "Profoto Pro-D3 750", "750 Ws", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true, maxWattSeconds = 750),
+        HardwareModelSpec(50, "Pro-D3 1250", "Profoto Pro-D3 1250", "1250 Ws", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true, maxWattSeconds = 1250),
+        HardwareModelSpec(51, "Pro-B3", "Profoto Pro-B3", "750 Ws", DeviceArchetype.PACK_GENERATOR, supportsBiColorCct = true, maxWattSeconds = 750),
+        HardwareModelSpec(52, "D30", "Profoto D30", "500 Ws", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true, maxWattSeconds = 500),
+        HardwareModelSpec(53, "B20", "Profoto B20", "250 Ws", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true, maxWattSeconds = 250),
+        HardwareModelSpec(54, "B30", "Profoto B30", "500 Ws", DeviceArchetype.MONOLIGHT, supportsBiColorCct = true, supportsAcStandPower = true, maxWattSeconds = 500),
         HardwareModelSpec(145, "C1", "Profoto C1", "1600 lm", DeviceArchetype.COMPACT_FLASH, supportsBiColorCct = true),
         HardwareModelSpec(146, "C1 Plus", "Profoto C1 Plus", "4300 lm", DeviceArchetype.COMPACT_FLASH, supportsBiColorCct = true),
         HardwareModelSpec(174, "ProPanel 3x2", "Profoto ProPanel 3x2 Bi-Color", "600 W", DeviceArchetype.CINEMA_LED, supportsBiColorCct = true),
@@ -188,10 +194,44 @@ object HardwareCatalog {
                 maxAirChannelDefault = 100,
                 usesLegacyV1Queries = true,
             )
+            "A10" in upper || "A1X" in upper || "A1" in upper -> specsById.getValue(30)
             "B10X PLUS" in upper || "B10X PRO" in upper -> specsById.getValue(143)
             "B10X" in upper -> specsById.getValue(144)
             "B10 PLUS" in upper -> specsById.getValue(141)
             "B10" in upper -> specsById.getValue(140)
+            "B1X" in upper || "B1" in upper -> HardwareModelSpec(
+                productId = 0,
+                shortName = "B1X",
+                marketingName = fallbackBleName?.takeIf { it.isNotBlank() } ?: "Profoto B1X",
+                ratedOutputLabel = "500 Ws",
+                archetype = DeviceArchetype.MONOLIGHT,
+                maxWattSeconds = 500,
+            )
+            "B2" in upper -> HardwareModelSpec(
+                productId = 0,
+                shortName = "B2",
+                marketingName = fallbackBleName?.takeIf { it.isNotBlank() } ?: "Profoto B2",
+                ratedOutputLabel = "250 Ws",
+                archetype = DeviceArchetype.MONOLIGHT,
+                maxWattSeconds = 250,
+            )
+            "D2 1000" in upper || "D2_1000" in upper -> HardwareModelSpec(
+                productId = 0,
+                shortName = "D2 1000",
+                marketingName = fallbackBleName?.takeIf { it.isNotBlank() } ?: "Profoto D2 1000",
+                ratedOutputLabel = "1000 Ws",
+                archetype = DeviceArchetype.MONOLIGHT,
+                maxWattSeconds = 1000,
+            )
+            "D2 500" in upper || "D2_500" in upper || "D2" in upper -> HardwareModelSpec(
+                productId = 0,
+                shortName = "D2 500",
+                marketingName = fallbackBleName?.takeIf { it.isNotBlank() } ?: "Profoto D2 500",
+                ratedOutputLabel = "500 Ws",
+                archetype = DeviceArchetype.MONOLIGHT,
+                maxWattSeconds = 500,
+            )
+            "PRO-10" in upper || "PRO10" in upper || "PRO-11" in upper || "PRO11" in upper -> specsById.getValue(4)
             "A2" in upper -> specsById.getValue(36)
             else -> HardwareModelSpec(
                 productId = productId,

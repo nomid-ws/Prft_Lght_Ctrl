@@ -2,14 +2,22 @@ package app.prft.lightctrl.ui.dashboard
 
 import androidx.lifecycle.ViewModel
 import app.prft.lightctrl.ble.DiscoveredProfotoDevice
+import app.prft.lightctrl.domain.GroupPreset
 import app.prft.lightctrl.domain.StudioDashboardState
 import app.prft.lightctrl.domain.StudioOrchestrator
+import app.prft.lightctrl.domain.StudioScene
+import app.prft.lightctrl.protocol.AfAssistMode
 import app.prft.lightctrl.protocol.AirGroup
 import app.prft.lightctrl.protocol.AirProtocolMode
+import app.prft.lightctrl.protocol.DeviceArchetype
 import app.prft.lightctrl.protocol.DisplayBrightnessLevel
 import app.prft.lightctrl.protocol.DisplayOrientationMode
 import app.prft.lightctrl.protocol.FlashMode
+import app.prft.lightctrl.protocol.MonolightZoomMode
+import app.prft.lightctrl.protocol.ReadySignalMode
 import app.prft.lightctrl.protocol.RemoteOperatingMode
+import app.prft.lightctrl.protocol.RfPowerLevel
+import app.prft.lightctrl.protocol.SyncTriggerMode
 import app.prft.lightctrl.protocol.VideoLightPowerMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.StateFlow
@@ -72,4 +80,73 @@ class StudioViewModel @Inject constructor(
         orchestrator.toggleConnectProGroupModeling(address, groupIdx)
     fun stepRemoteGroupTrim(address: String, group: AirGroup, deltaTenths: Int) =
         orchestrator.stepRemoteAirGroupTrim(address, group, deltaTenths)
+
+    // Preferences & Pinned Kit
+    fun setGroupRole(group: AirGroup, role: String?) = orchestrator.setGroupRole(group, role)
+    fun setGroupTtlEvBias(address: String, group: AirGroup, tenthStops: Int) =
+        orchestrator.setGroupTtlEvBias(address, group, tenthStops)
+    fun setDevicePinned(address: String, pinned: Boolean) =
+        orchestrator.setDevicePinned(address, pinned)
+    fun setVolumeKeyTestFlashEnabled(enabled: Boolean) =
+        orchestrator.setVolumeKeyTestFlashEnabled(enabled)
+    fun setAutoReconnectPinnedEnabled(enabled: Boolean) =
+        orchestrator.setAutoReconnectPinnedEnabled(enabled)
+    fun setDualPowerReadoutEnabled(enabled: Boolean) =
+        orchestrator.setDualPowerReadoutEnabled(enabled)
+
+    // Remote Settings
+    fun setRemoteSyncMode(address: String, mode: SyncTriggerMode) =
+        orchestrator.setRemoteSyncMode(address, mode)
+    fun setRemoteAfAssist(address: String, mode: AfAssistMode) =
+        orchestrator.setRemoteAfAssist(address, mode)
+    fun setRemoteRfPower(address: String, level: RfPowerLevel) =
+        orchestrator.setRemoteRfPower(address, level)
+    fun setRemoteSleepTimeout(address: String, minutes: Int) =
+        orchestrator.setRemoteSleepTimeout(address, minutes)
+    fun setRemoteBrightness(address: String, brightness: Int) =
+        orchestrator.setRemoteBrightness(address, brightness)
+    fun setRemoteBatteryType(address: String, batteryType: Int) =
+        orchestrator.setRemoteBatteryType(address, batteryType)
+    fun setRemoteSounds(address: String, enabled: Boolean) =
+        orchestrator.setRemoteSounds(address, enabled)
+
+    // Monolight Zoom & Ready Signal
+    fun setMonolightZoom(address: String, mode: MonolightZoomMode, position: Int? = null) =
+        orchestrator.setMonolightZoom(address, mode, position)
+    fun setReadySignalMode(address: String, mode: ReadySignalMode) =
+        orchestrator.setReadySignalMode(address, mode)
+
+    // Studio Scenes & Presets
+    val savedScenes: StateFlow<List<StudioScene>> = orchestrator.savedScenes
+    fun saveScene(scene: StudioScene) = orchestrator.saveScene(scene)
+    fun deleteScene(sceneId: String) = orchestrator.deleteScene(sceneId)
+    fun importScenes(scenes: List<StudioScene>) = orchestrator.importScenes(scenes)
+    fun applyScene(scene: StudioScene) = orchestrator.applyScene(scene)
+
+    fun captureCurrentScene(name: String, notes: String = ""): StudioScene {
+        val s = state.value
+        val activeRemote = s.connectedUnits.firstOrNull {
+            it.isReady && (it.archetype == DeviceArchetype.CONNECT_PRO_REMOTE || it.archetype == DeviceArchetype.CONNECT_REMOTE)
+        }
+        val groupPresets = s.groupChannels.map { ch ->
+            GroupPreset(
+                group = ch.group,
+                powerTenthStops = ch.powerTenthStops,
+                isEnabled = ch.isEnabled,
+                isModelingEnabled = ch.isModelingEnabled,
+                roleLabel = ch.roleLabel,
+                ttlEvBiasTenthStops = if (ch.ttlBiasTenthStops != 0) ch.ttlBiasTenthStops else null,
+            )
+        }
+        return StudioScene(
+            name = name.trim().ifEmpty { "Studio Preset" },
+            setupNotes = notes.trim(),
+            groupPresets = groupPresets,
+            remoteChannel = activeRemote?.airChannel,
+            remoteOperatingMode = activeRemote?.remoteMode,
+            syncTriggerMode = activeRemote?.syncMode,
+            afAssistMode = activeRemote?.afAssistMode,
+            rfPowerLevel = activeRemote?.rfPowerLevel,
+        )
+    }
 }

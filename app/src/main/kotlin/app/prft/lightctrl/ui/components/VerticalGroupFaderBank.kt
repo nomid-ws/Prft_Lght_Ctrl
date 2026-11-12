@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +50,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.prft.lightctrl.domain.ConnectedProfotoUnit
+import app.prft.lightctrl.domain.PowerScaleConverter
 import app.prft.lightctrl.domain.StudioDashboardState
 import app.prft.lightctrl.domain.StudioGroupChannelState
 import app.prft.lightctrl.protocol.AirGroup
@@ -60,7 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private const val MIN_TENTH_STOPS = 10  // 1.0 f-stops
+private const val MIN_TENTH_STOPS = 1   // 0.1 f-stops (op=177 floor)
 private const val MAX_TENTH_STOPS = 100 // 10.0 f-stops
 
 /**
@@ -77,11 +79,13 @@ private const val MAX_TENTH_STOPS = 100 // 10.0 f-stops
 fun VerticalGroupFaderBank(
     state: StudioDashboardState,
     edgeMargin: Dp,
+    isLandscape: Boolean = false,
     onMasterAllTrim: (deltaTenths: Int) -> Unit,
     onGroupPowerChange: (group: AirGroup, tenthStops: Int) -> Unit,
     onGroupMuteToggle: (group: AirGroup) -> Unit,
     onRemoteChannelChange: (address: String, channel: Int) -> Unit = { _, _ -> },
     onRemoteToggleMode: (unit: ConnectedProfotoUnit) -> Unit = {},
+    onEditGroupRole: (group: AirGroup) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -97,149 +101,65 @@ fun VerticalGroupFaderBank(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = horizontalPad, vertical = 6.dp),
+            .padding(
+                start = horizontalPad,
+                end = horizontalPad,
+                top = if (isLandscape) 0.dp else 6.dp,
+                bottom = if (isLandscape) 4.dp else 6.dp,
+            ),
     ) {
-        // Optional Active Camera Remote Strip (Nickname + Hardware Model Always Visible)
-        if (activeRemote != null) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(StudioColors.CardSurface, RoundedCornerShape(12.dp))
-                    .border(1.dp, StudioColors.SubtleOutline, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = activeRemote.displayTitle,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = StudioColors.TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+        if (isLandscape) {
+            // Landscape: Single compact horizontal strip combining Remote summary & Master trim
+            if (activeRemote != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ActiveRemoteSummaryStrip(
+                        activeRemote = activeRemote,
+                        isLandscape = true,
+                        onRemoteToggleMode = onRemoteToggleMode,
+                        onRemoteChannelChange = onRemoteChannelChange,
+                        modifier = Modifier.weight(1f),
                     )
-                    val modeText = activeRemote.remoteMode.label
-                    val subPrefix = if (activeRemote.hasNickname) "${activeRemote.hardwareModelName} · " else ""
-                    Text(
-                        text = "${subPrefix}Ch ${activeRemote.airChannel} · $modeText",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = StudioColors.TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    MasterRatioTrimBar(
+                        masterEnabled = masterEnabled,
+                        isLandscape = true,
+                        onMasterAllTrim = onMasterAllTrim,
+                        modifier = Modifier.weight(1f),
                     )
                 }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (activeRemote.archetype == DeviceArchetype.CONNECT_REMOTE) {
-                        FilledTonalButton(
-                            onClick = { onRemoteToggleMode(activeRemote) },
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                            modifier = Modifier
-                                .height(48.dp)
-                                .widthIn(min = 52.dp),
-                        ) {
-                            val badge = when (activeRemote.remoteMode) {
-                                RemoteOperatingMode.AUTO_TTL -> "AUTO"
-                                RemoteOperatingMode.MANUAL -> "MAN"
-                                RemoteOperatingMode.OFF -> "OFF"
-                            }
-                            Text(
-                                text = badge,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                ),
-                            )
-                        }
-                    }
-                    FilledTonalButton(
-                        onClick = { onRemoteChannelChange(activeRemote.address, activeRemote.airChannel - 1) },
-                        enabled = activeRemote.airChannel > activeRemote.minAirChannel,
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(0.dp),
-                        modifier = Modifier
-                            .height(48.dp)
-                            .widthIn(min = 48.dp),
-                    ) { Text("Ch-") }
-                    FilledTonalButton(
-                        onClick = { onRemoteChannelChange(activeRemote.address, activeRemote.airChannel + 1) },
-                        enabled = activeRemote.airChannel < activeRemote.maxAirChannel,
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(0.dp),
-                        modifier = Modifier
-                            .height(48.dp)
-                            .widthIn(min = 48.dp),
-                    ) { Text("Ch+") }
-                }
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-        }
-
-        // 1. Compact Top Master Ratio Trim Bar (All Groups)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(StudioColors.CardSurface, RoundedCornerShape(12.dp))
-                .border(1.dp, StudioColors.SubtleOutline, RoundedCornerShape(12.dp))
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .padding(horizontal = 4.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "ALL",
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                    color = if (masterEnabled) StudioColors.TextPrimary else StudioColors.TextMuted,
+            } else {
+                MasterRatioTrimBar(
+                    masterEnabled = masterEnabled,
+                    isLandscape = true,
+                    onMasterAllTrim = onMasterAllTrim,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
+        } else {
+            // Portrait: Stacked Remote bar then Master bar
+            if (activeRemote != null) {
+                ActiveRemoteSummaryStrip(
+                    activeRemote = activeRemote,
+                    isLandscape = false,
+                    onRemoteToggleMode = onRemoteToggleMode,
+                    onRemoteChannelChange = onRemoteChannelChange,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
-            MasterStepButton(
-                label = "-1.0",
-                enabled = masterEnabled,
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onMasterAllTrim(-10)
-                },
-                modifier = Modifier.weight(1f),
-            )
-            MasterStepButton(
-                label = "-0.1",
-                enabled = masterEnabled,
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onMasterAllTrim(-1)
-                },
-                modifier = Modifier.weight(1f),
-            )
-            MasterStepButton(
-                label = "+0.1",
-                enabled = masterEnabled,
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onMasterAllTrim(1)
-                },
-                modifier = Modifier.weight(1f),
-            )
-            MasterStepButton(
-                label = "+1.0",
-                enabled = masterEnabled,
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onMasterAllTrim(10)
-                },
-                modifier = Modifier.weight(1f),
+            MasterRatioTrimBar(
+                masterEnabled = masterEnabled,
+                isLandscape = false,
+                onMasterAllTrim = onMasterAllTrim,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(if (isLandscape) 8.dp else 10.dp))
 
         // 2. 6 Side-by-Side Vertical Channel Faders (A..F) — Zero Vertical Scroll
         Row(
@@ -249,8 +169,20 @@ fun VerticalGroupFaderBank(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             state.groupChannels.forEach { channel ->
+                val groupMaxWs = state.connectedUnits
+                    .firstOrNull {
+                        it.isReady &&
+                            it.airGroup == channel.group &&
+                            (it.modelSpec.maxWattSeconds ?: 0) > 0
+                    }
+                    ?.modelSpec?.maxWattSeconds
+
                 VerticalGroupFaderStrip(
                     channel = channel,
+                    isLandscape = isLandscape,
+                    isDualPowerReadoutEnabled = state.isDualPowerReadoutEnabled,
+                    maxWs = groupMaxWs,
+                    onEditRole = { onEditGroupRole(channel.group) },
                     onPowerChange = { tenths -> onGroupPowerChange(channel.group, tenths) },
                     onMuteToggle = { onGroupMuteToggle(channel.group) },
                     modifier = Modifier
@@ -259,6 +191,157 @@ fun VerticalGroupFaderBank(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ActiveRemoteSummaryStrip(
+    activeRemote: ConnectedProfotoUnit,
+    isLandscape: Boolean = false,
+    onRemoteToggleMode: (ConnectedProfotoUnit) -> Unit,
+    onRemoteChannelChange: (address: String, channel: Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .background(StudioColors.CardSurface, RoundedCornerShape(12.dp))
+            .border(1.dp, StudioColors.SubtleOutline, RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = if (isLandscape) 2.dp else 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = activeRemote.displayTitle,
+                style = MaterialTheme.typography.labelLarge,
+                color = StudioColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val modeText = if (activeRemote.archetype == DeviceArchetype.CONNECT_REMOTE) {
+                "Collar: ${activeRemote.remoteMode.label}"
+            } else {
+                activeRemote.remoteMode.label
+            }
+            val subPrefix = if (activeRemote.hasNickname) "${activeRemote.hardwareModelName} · " else ""
+            Text(
+                text = "${subPrefix}Ch ${activeRemote.airChannel} · $modeText",
+                style = MaterialTheme.typography.labelMedium,
+                color = StudioColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (activeRemote.archetype == DeviceArchetype.CONNECT_PRO_REMOTE) {
+                FilledTonalButton(
+                    onClick = { onRemoteToggleMode(activeRemote) },
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .widthIn(min = 52.dp),
+                ) {
+                    val isTtl = activeRemote.remoteMode == RemoteOperatingMode.AUTO_TTL ||
+                        activeRemote.flashMode == FlashMode.TTL
+                    Text(
+                        text = if (isTtl) "TTL" else "MAN",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                    )
+                }
+            }
+            FilledTonalButton(
+                onClick = { onRemoteChannelChange(activeRemote.address, activeRemote.airChannel - 1) },
+                enabled = activeRemote.airChannel > activeRemote.minAirChannel,
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier
+                    .height(48.dp)
+                    .widthIn(min = 48.dp),
+            ) { Text("Ch-") }
+            FilledTonalButton(
+                onClick = { onRemoteChannelChange(activeRemote.address, activeRemote.airChannel + 1) },
+                enabled = activeRemote.airChannel < activeRemote.maxAirChannel,
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier
+                    .height(48.dp)
+                    .widthIn(min = 48.dp),
+            ) { Text("Ch+") }
+        }
+    }
+}
+
+@Composable
+private fun MasterRatioTrimBar(
+    masterEnabled: Boolean,
+    isLandscape: Boolean = false,
+    onMasterAllTrim: (deltaTenths: Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val haptics = LocalHapticFeedback.current
+    Row(
+        modifier = modifier
+            .background(StudioColors.CardSurface, RoundedCornerShape(12.dp))
+            .border(1.dp, StudioColors.SubtleOutline, RoundedCornerShape(12.dp))
+            .padding(horizontal = 8.dp, vertical = if (isLandscape) 2.dp else 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 4.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "ALL",
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                ),
+                color = if (masterEnabled) StudioColors.TextPrimary else StudioColors.TextMuted,
+            )
+        }
+
+        MasterStepButton(
+            label = "-1.0",
+            enabled = masterEnabled,
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                onMasterAllTrim(-10)
+            },
+            modifier = Modifier.weight(1f),
+        )
+        MasterStepButton(
+            label = "-0.1",
+            enabled = masterEnabled,
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onMasterAllTrim(-1)
+            },
+            modifier = Modifier.weight(1f),
+        )
+        MasterStepButton(
+            label = "+0.1",
+            enabled = masterEnabled,
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onMasterAllTrim(1)
+            },
+            modifier = Modifier.weight(1f),
+        )
+        MasterStepButton(
+            label = "+1.0",
+            enabled = masterEnabled,
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                onMasterAllTrim(10)
+            },
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -293,6 +376,10 @@ private fun MasterStepButton(
 @Composable
 private fun VerticalGroupFaderStrip(
     channel: StudioGroupChannelState,
+    isLandscape: Boolean = false,
+    isDualPowerReadoutEnabled: Boolean = false,
+    maxWs: Int? = null,
+    onEditRole: () -> Unit = {},
     onPowerChange: (Int) -> Unit,
     onMuteToggle: () -> Unit,
     modifier: Modifier = Modifier,
@@ -308,20 +395,37 @@ private fun VerticalGroupFaderStrip(
     }
 
     val interactive = channel.hasActiveHardware && channel.isEnabled
-    val readoutText = when {
+    val baseScale = String.format(Locale.US, "%.1f", localTenthStops / 10.0)
+    val primaryReadout = when {
         !channel.hasActiveHardware -> "--"
         !channel.isEnabled -> "OFF"
-        else -> String.format(Locale.US, "%.1f", localTenthStops / 10.0)
+        else -> baseScale
+    }
+    val secondaryReadout = if (interactive && isDualPowerReadoutEnabled) {
+        if (maxWs != null && maxWs > 0) {
+            val ws = PowerScaleConverter.formatWattSeconds(maxWs, localTenthStops)
+            if (isLandscape) ws else ws.replace(" Ws", "Ws")
+        } else {
+            PowerScaleConverter.formatPowerFraction(localTenthStops)
+                .replace(" EV", "")
+                .replace(" + 0.", "+.")
+                .replace(" - 0.", "-.")
+                .replace(" + ", "+")
+                .replace(" - ", "-")
+        }
+    } else {
+        null
     }
 
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Top Group Letter + Anti-Occlusion Readout Pill
+        // Top Group Letter + Role Label + Anti-Occlusion Readout Pill
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable(onClick = onEditRole)
                 .background(
                     color = if (isDragging) StudioColors.TextPrimary else StudioColors.CardSurface,
                     shape = RoundedCornerShape(10.dp),
@@ -331,14 +435,19 @@ private fun VerticalGroupFaderStrip(
                     color = if (isDragging || interactive) StudioColors.TextPrimary else StudioColors.SubtleOutline,
                     shape = RoundedCornerShape(10.dp),
                 )
-                .padding(vertical = 6.dp, horizontal = 2.dp),
+                .padding(vertical = if (isLandscape) 4.dp else 5.dp, horizontal = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            val titleText = if (!channel.roleLabel.isNullOrBlank()) {
+                "${channel.group.label} · ${channel.roleLabel}"
+            } else {
+                channel.group.label
+            }
             Text(
-                text = channel.group.label,
+                text = titleText,
                 style = MaterialTheme.typography.labelLarge.copy(
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
+                    fontSize = if (isLandscape) 12.sp else 13.sp,
                 ),
                 color = when {
                     isDragging -> StudioColors.CanvasBase
@@ -346,55 +455,90 @@ private fun VerticalGroupFaderStrip(
                     else -> StudioColors.TextMuted
                 },
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = readoutText,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                ),
-                color = when {
-                    isDragging -> StudioColors.CanvasBase
-                    interactive -> StudioColors.TextPrimary
-                    else -> StudioColors.TextSecondary
+            val readoutColor = when {
+                isDragging -> StudioColors.CanvasBase
+                interactive -> StudioColors.TextPrimary
+                else -> StudioColors.TextSecondary
+            }
+            if (isLandscape) {
+                val combined = if (secondaryReadout != null) "$primaryReadout · $secondaryReadout" else primaryReadout
+                Text(
+                    text = combined,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                    ),
+                    color = readoutColor,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                Text(
+                    text = primaryReadout,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                    ),
+                    color = readoutColor,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+                if (secondaryReadout != null) {
+                    Text(
+                        text = secondaryReadout,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 9.5.sp,
+                        ),
+                        color = if (isDragging) StudioColors.CanvasBase else StudioColors.TextSecondary,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(if (isLandscape) 6.dp else 8.dp))
+
+        // In portrait mode, place [+] button above canvas
+        if (!isLandscape) {
+            FilledTonalButton(
+                onClick = {
+                    val next = (localTenthStops + 1).coerceAtMost(MAX_TENTH_STOPS)
+                    localTenthStops = next
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onPowerChange(next)
                 },
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                softWrap = false,
-            )
+                enabled = interactive && localTenthStops < MAX_TENTH_STOPS,
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .semantics { contentDescription = "Group ${channel.group.label} plus 0.1 stop" },
+            ) {
+                Text(
+                    text = "+",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // Single-Tap +0.1 Stepper (WCAG 2.2 SC 2.5.7)
-        FilledTonalButton(
-            onClick = {
-                val next = (localTenthStops + 1).coerceAtMost(MAX_TENTH_STOPS)
-                localTenthStops = next
-                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                onPowerChange(next)
-            },
-            enabled = interactive && localTenthStops < MAX_TENTH_STOPS,
-            shape = RoundedCornerShape(8.dp),
-            contentPadding = PaddingValues(0.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .semantics { contentDescription = "Group ${channel.group.label} plus 0.1 stop" },
-        ) {
-            Text(
-                text = "+",
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                ),
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Precision Monochrome Vertical Studio Fader Track
+        // Precision Vertical Studio Fader Canvas (Weight 1f)
         VerticalStudioFaderCanvas(
             groupLabel = channel.group.label,
             valueTenthStops = localTenthStops,
@@ -416,36 +560,95 @@ private fun VerticalGroupFaderStrip(
                 .fillMaxWidth(),
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(if (isLandscape) 6.dp else 8.dp))
 
-        // Single-Tap -0.1 Stepper (WCAG 2.2 SC 2.5.7)
-        FilledTonalButton(
-            onClick = {
-                val next = (localTenthStops - 1).coerceAtLeast(MIN_TENTH_STOPS)
-                localTenthStops = next
-                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                onPowerChange(next)
-            },
-            enabled = interactive && localTenthStops > MIN_TENTH_STOPS,
-            shape = RoundedCornerShape(8.dp),
-            contentPadding = PaddingValues(0.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .semantics { contentDescription = "Group ${channel.group.label} minus 0.1 stop" },
-        ) {
-            Text(
-                text = "-",
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                ),
-            )
+        // Stepper controls beneath fader canvas
+        if (isLandscape) {
+            // Side-by-side [-] and [+] steppers in a Row (height 48dp, >= 8dp target separation)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilledTonalButton(
+                    onClick = {
+                        val next = (localTenthStops - 1).coerceAtLeast(MIN_TENTH_STOPS)
+                        localTenthStops = next
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onPowerChange(next)
+                    },
+                    enabled = interactive && localTenthStops > MIN_TENTH_STOPS,
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .semantics { contentDescription = "Group ${channel.group.label} minus 0.1 stop" },
+                ) {
+                    Text(
+                        text = "-",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                    )
+                }
+
+                FilledTonalButton(
+                    onClick = {
+                        val next = (localTenthStops + 1).coerceAtMost(MAX_TENTH_STOPS)
+                        localTenthStops = next
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onPowerChange(next)
+                    },
+                    enabled = interactive && localTenthStops < MAX_TENTH_STOPS,
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .semantics { contentDescription = "Group ${channel.group.label} plus 0.1 stop" },
+                ) {
+                    Text(
+                        text = "+",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                    )
+                }
+            }
+        } else {
+            // Portrait: Single [-] stepper
+            FilledTonalButton(
+                onClick = {
+                    val next = (localTenthStops - 1).coerceAtLeast(MIN_TENTH_STOPS)
+                    localTenthStops = next
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onPowerChange(next)
+                },
+                enabled = interactive && localTenthStops > MIN_TENTH_STOPS,
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .semantics { contentDescription = "Group ${channel.group.label} minus 0.1 stop" },
+            ) {
+                Text(
+                    text = "-",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Bottom Group ON / MUTE Toggle
+        // Bottom Group ON / MUTE Toggle (height 48dp)
         OutlinedButton(
             onClick = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -549,8 +752,8 @@ private fun VerticalStudioFaderCanvas(
             val slotWidth = 8.dp.toPx().coerceAtMost(size.width * 0.28f)
             val tickHalfWidth = (size.width * 0.34f).coerceAtLeast(slotWidth)
 
-            // 1. Full-stop scale ticks (stops 2..9)
-            for (stop in 2..9) {
+            // 1. Full-stop scale ticks (stops 1..9)
+            for (stop in 1..9) {
                 val stopFrac = (stop * 10 - MIN_TENTH_STOPS).toFloat() / (MAX_TENTH_STOPS - MIN_TENTH_STOPS)
                 val tickY = padY + (1f - stopFrac) * usableHeight
                 drawLine(

@@ -115,17 +115,20 @@ class ProfotoBleConnectionFsm(
                 discovered = awaitServiceDiscovery()
             }
 
+            if (ProfotoGattProfile.PUP_TX_CHAR_UUID !in discovered.characteristicUuids ||
+                ProfotoGattProfile.PUP_RX_CHAR_UUID !in discovered.characteristicUuids
+            ) {
+                throw IllegalStateException("Missing PUP TX/RX characteristics on ${device.address}")
+            }
             val resolvedService = when {
                 ProfotoGattProfile.PRIMARY_SIG_SERVICE_UUID in discovered.serviceUuids ->
                     ProfotoGattProfile.PRIMARY_SIG_SERVICE_UUID
                 ProfotoGattProfile.LEGACY_BASE_SERVICE_UUID in discovered.serviceUuids ->
                     ProfotoGattProfile.LEGACY_BASE_SERVICE_UUID
-                else -> throw IllegalStateException("No Profoto GATT service (0xFDBB or 1d94...) found on ${device.address}")
-            }
-            if (ProfotoGattProfile.PUP_TX_CHAR_UUID !in discovered.characteristicUuids ||
-                ProfotoGattProfile.PUP_RX_CHAR_UUID !in discovered.characteristicUuids
-            ) {
-                throw IllegalStateException("Missing PUP TX/RX characteristics on ${device.address}")
+                ProfotoGattProfile.AUTH_SERVICE_UUID in discovered.serviceUuids ->
+                    ProfotoGattProfile.AUTH_SERVICE_UUID
+                else -> discovered.serviceUuids.firstOrNull { it !in ProfotoGattProfile.FORBIDDEN_DFU_SERVICE_UUIDS }
+                    ?: throw IllegalStateException("No Profoto GATT service found on ${device.address}")
             }
             activeServiceUuid = resolvedService
             _stage.value = BleConnectionStage.ServicesDiscovered(resolvedService)

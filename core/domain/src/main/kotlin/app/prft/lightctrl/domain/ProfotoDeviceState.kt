@@ -2,6 +2,7 @@ package app.prft.lightctrl.domain
 
 import app.prft.lightctrl.ble.BleConnectionStage
 import app.prft.lightctrl.ble.DiscoveredProfotoDevice
+import app.prft.lightctrl.protocol.AfAssistMode
 import app.prft.lightctrl.protocol.AirGroup
 import app.prft.lightctrl.protocol.AirProtocolMode
 import app.prft.lightctrl.protocol.BatteryChemistry
@@ -11,7 +12,11 @@ import app.prft.lightctrl.protocol.DisplayOrientationMode
 import app.prft.lightctrl.protocol.FlashMode
 import app.prft.lightctrl.protocol.HardwareCatalog
 import app.prft.lightctrl.protocol.HardwareModelSpec
+import app.prft.lightctrl.protocol.MonolightZoomMode
+import app.prft.lightctrl.protocol.ReadySignalMode
 import app.prft.lightctrl.protocol.RemoteOperatingMode
+import app.prft.lightctrl.protocol.RfPowerLevel
+import app.prft.lightctrl.protocol.SyncTriggerMode
 import app.prft.lightctrl.protocol.VideoLightPowerMode
 
 /**
@@ -70,6 +75,28 @@ data class ConnectedProfotoUnit(
     val airModelLightMask: Int = 0x00,
     val batteryChemistry: BatteryChemistry = BatteryChemistry.AUTO_DETECT,
 
+    // Per-Group TTL EV Bias (Groups A..C)
+    val groupTtlBiasesTenthStops: Map<AirGroup, Int> = mapOf(
+        AirGroup.GROUP_A to 0,
+        AirGroup.GROUP_B to 0,
+        AirGroup.GROUP_C to 0,
+    ),
+
+    // Remote Settings & Advanced Triggers
+    val syncMode: SyncTriggerMode = SyncTriggerMode.FIRST,
+    val afAssistMode: AfAssistMode = AfAssistMode.OFF,
+    val rfPowerLevel: RfPowerLevel = RfPowerLevel.P4,
+    val rfPowerRange: IntRange? = null,
+    val autoOffMinutes: Int = 30,
+    val autoStandbyMinutes: Int = 15,
+    val controlSoundsEnabled: Boolean = true,
+
+    // Monolight Zoom & Ready Signal Mode
+    val zoomMode: MonolightZoomMode = MonolightZoomMode.AUTO,
+    val zoomValue: Int? = null,
+    val zoomRange: IntRange? = null,
+    val readySignalMode: ReadySignalMode = ReadySignalMode.SOUND,
+
     // Display, Power & Live Telemetry
     val displayBrightness: DisplayBrightnessLevel = DisplayBrightnessLevel.HIGH,
     val displayOrientation: DisplayOrientationMode = DisplayOrientationMode.AUTO,
@@ -89,6 +116,7 @@ data class ConnectedProfotoUnit(
     val isFailed: Boolean get() = stage is BleConnectionStage.Failed
     val flashFStops: Float get() = flashPowerTenthStops / 10f
     val ttlEvComp: Float get() = ttlEvCompTenthStops / 10f
+    val supportsZoom: Boolean get() = zoomRange != null || zoomValue != null
 
     val videoIntensityPercent: Int
         get() {
@@ -108,6 +136,8 @@ data class StudioGroupChannelState(
     val memberCount: Int,
     val directStrobeCount: Int = 0,
     val memberNames: List<String> = emptyList(),
+    val roleLabel: String? = null,
+    val ttlBiasTenthStops: Int = 0,
 )
 
 data class StudioDashboardState(
@@ -116,6 +146,11 @@ data class StudioDashboardState(
     val isScanning: Boolean = false,
     val benchSimulatorEnabled: Boolean = false,
     val deviceNicknames: Map<String, String> = emptyMap(),
+    val groupRoles: Map<AirGroup, String> = emptyMap(),
+    val pinnedKitMacs: Set<String> = emptySet(),
+    val isVolumeKeyTestFlashEnabled: Boolean = false,
+    val isAutoReconnectPinnedEnabled: Boolean = true,
+    val isDualPowerReadoutEnabled: Boolean = false,
     val scannedDevices: List<DiscoveredProfotoDevice> = emptyList(),
     val connectedUnits: List<ConnectedProfotoUnit> = emptyList(),
     val groupChannels: List<StudioGroupChannelState> = listOf(
@@ -133,6 +168,8 @@ data class StudioDashboardState(
             isEnabled = false,
             powerTenthStops = 70,
             memberCount = 0,
+            roleLabel = null,
+            ttlBiasTenthStops = 0,
         )
     },
     val selectedGroupFilter: AirGroup = AirGroup.ALL,

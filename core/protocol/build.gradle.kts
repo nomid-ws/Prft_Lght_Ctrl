@@ -16,3 +16,8 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 }
+
+tasks.register("testDebugUnitTest") {
+    dependsOn(tasks.named("test"))
+}
+

@@ -115,7 +115,11 @@ sealed interface PupDecodedMessage {
         val ev: Float get() = tenthStops / 10f
     }
     /** Opcode 131: AirPxBias(int8 biasTenthStops, uint8 groupCode 1..7). */
-    data class AirGroupTtlBias(val tenthStops: Int, val group: AirGroup) : PupDecodedMessage {
+    data class AirGroupTtlBias(
+        val tenthStops: Int,
+        val group: AirGroup,
+        val counter: Int = 0,
+    ) : PupDecodedMessage {
         val ev: Float get() = tenthStops / 10f
     }
     data class AirHeadMask(val mask: Int) : PupDecodedMessage {
@@ -136,10 +140,24 @@ sealed interface PupDecodedMessage {
         val targetByGroup: List<Int>,
     ) : PupDecodedMessage
 
+    // Remote Settings & Advanced Triggers
+    data class RemoteSyncMode(val mode: SyncTriggerMode) : PupDecodedMessage
+    data class RemoteAfAssist(val mode: AfAssistMode) : PupDecodedMessage
+    data class RemoteRfPower(val level: RfPowerLevel) : PupDecodedMessage
+    data class RfPowerRange(val minDbm: Int, val maxDbm: Int) : PupDecodedMessage
+    data class MonolightZoomState(
+        val mode: MonolightZoomMode = MonolightZoomMode.MANUAL,
+        val value: Int? = null,
+        val range: IntRange? = null,
+    ) : PupDecodedMessage
+    data class ReadySignalState(val mode: ReadySignalMode) : PupDecodedMessage
+
     // Display & Ergonomics (B10X / B10X Plus / Connect Pro)
     data class DisplayBrightness(val level: DisplayBrightnessLevel) : PupDecodedMessage
     data class DisplayOrientation(val orientation: DisplayOrientationMode) : PupDecodedMessage
     data class AutoOffMinutes(val minutes: Int) : PupDecodedMessage
+    data class AutoStandbyMinutes(val minutes: Int) : PupDecodedMessage
+    data class ControlSoundsState(val enabled: Boolean) : PupDecodedMessage
 
     // Identity, Battery & Flash Telemetry
     data class BleLocalName(val name: String) : PupDecodedMessage
@@ -382,8 +400,11 @@ object PupFrameCodec {
         tenthStops: Int,
         group: AirGroup = AirGroup.ALL,
     ): ByteArray {
-        if (tenthStops !in -50..50) {
-            throw PupCodecException("AirPxBias tenth-stops out of range (-50..50): $tenthStops")
+        if (tenthStops !in -20..20) {
+            throw PupCodecException("AirPxBias tenth-stops out of range (-20..20): $tenthStops")
+        }
+        if (group !in setOf(AirGroup.GROUP_A, AirGroup.GROUP_B, AirGroup.GROUP_C, AirGroup.ALL)) {
+            throw PupCodecException("AirPxBias only supports groups A..C (or ALL), got $group")
         }
         return encodePacket(
             counter,
@@ -433,15 +454,68 @@ object PupFrameCodec {
         return encodePacket(counter, PupOpcodes.AIR_ABSOLUTE_GROUP_ENERGY, bytes)
     }
 
+    fun encodeAirAbsoluteGroupEnergy(counter: Int, groupEnergies: Map<AirGroup, Int>): ByteArray {
+        val orderedGroups = listOf(
+            AirGroup.GROUP_A, AirGroup.GROUP_B, AirGroup.GROUP_C,
+            AirGroup.GROUP_D, AirGroup.GROUP_E, AirGroup.GROUP_F
+        )
+        val list = orderedGroups.map { grp ->
+            val v = groupEnergies[grp] ?: throw PupCodecException("Missing energy for group $grp")
+            if (v !in 1..100) throw PupCodecException("Group ${grp.label} power out of range (1..100): $v")
+            v
+        }
+        return encodeAirAbsoluteGroupEnergy(counter, list)
+    }
+
+    // Remote Settings & Advanced Controls
+    fun encodeSyncMode(counter: Int, mode: SyncTriggerMode): ByteArray =
+        encodePacket(counter, PupOpcodes.SYNC_MODE, byteArrayOf(mode.code.toByte()))
+
+    fun encodeAfAssistMode(counter: Int, mode: AfAssistMode): ByteArray =
+        encodePacket(counter, PupOpcodes.AF_ASSIST_MODE, byteArrayOf(mode.code.toByte()))
+
+    fun encodeRfPower(counter: Int, level: RfPowerLevel): ByteArray =
+        encodePacket(counter, PupOpcodes.RMI_RF_POWER, byteArrayOf(level.code.toByte()))
+
+    fun encodeZoomMode(counter: Int, mode: MonolightZoomMode): ByteArray =
+        encodePacket(counter, PupOpcodes.ZOOM_MODE, byteArrayOf(mode.code.toByte()))
+
+    fun encodeZoomValue(counter: Int, position: Int): ByteArray {
+        if (position !in 0..65535) throw PupCodecException("Zoom position out of range (0..65535): $position")
+        return encodeUInt16Le(counter, PupOpcodes.ZOOM_VALUE, position)
+    }
+
+    fun encodeReadySignalMode(counter: Int, mode: ReadySignalMode): ByteArray =
+        encodePacket(counter, PupOpcodes.READY_SIGNAL_MODE, byteArrayOf(mode.code.toByte()))
+
+    fun encodeAutoOffTimeout(counter: Int, minutes: Int): ByteArray {
+        if (minutes !in 0..255) throw PupCodecException("Auto-off timeout out of range (0..255 min): $minutes")
+        return encodePacket(counter, PupOpcodes.AUTO_OFF_TIMEOUT, byteArrayOf(minutes.toByte()))
+    }
+
+    fun encodeAutoStandbyTimeout(counter: Int, minutes: Int): ByteArray {
+        if (minutes !in 0..255) throw PupCodecException("Auto-standby timeout out of range (0..255 min): $minutes")
+        return encodePacket(counter, PupOpcodes.AUTO_STANDBY_TIMEOUT, byteArrayOf(minutes.toByte()))
+    }
+
+    fun encodeControlSounds(counter: Int, enabled: Boolean): ByteArray =
+        encodeBoolByte(counter, PupOpcodes.CONTROL_SOUNDS_ENABLE, enabled)
+
     // Display & Battery Chemistry
     fun encodeDisplayBrightness(counter: Int, level: DisplayBrightnessLevel): ByteArray =
         encodePacket(counter, PupOpcodes.DISPLAY_BRIGHTNESS, byteArrayOf(level.code.toByte()))
+
+    fun encodeDisplayBrightness(counter: Int, brightness: Int): ByteArray =
+        encodePacket(counter, PupOpcodes.DISPLAY_BRIGHTNESS, byteArrayOf(brightness.coerceIn(0, 3).toByte()))
 
     fun encodeDisplayOrientation(counter: Int, orientation: DisplayOrientationMode): ByteArray =
         encodePacket(counter, PupOpcodes.DISPLAY_ORIENTATION, byteArrayOf(orientation.code.toByte()))
 
     fun encodeBatteryChemistry(counter: Int, chemistry: BatteryChemistry): ByteArray =
         encodePacket(counter, PupOpcodes.BATTERY_TYPE, byteArrayOf(chemistry.code.toByte()))
+
+    fun encodeBatteryType(counter: Int, batteryType: Int): ByteArray =
+        encodePacket(counter, PupOpcodes.BATTERY_TYPE, byteArrayOf(batteryType.toByte()))
 
     // =========================================================================
     // Typed Payload Decoders
@@ -605,6 +679,50 @@ object PupFrameCodec {
                 requireSize(payload, 1, "RemoteMode")
                 PupDecodedMessage.RemoteModeState(RemoteOperatingMode.fromCode(payload[0].toInt() and 0xFF))
             }
+            PupOpcodes.SYNC_MODE -> {
+                requireSize(payload, 1, "SyncMode")
+                PupDecodedMessage.RemoteSyncMode(SyncTriggerMode.fromCode(payload[0].toInt() and 0xFF))
+            }
+            PupOpcodes.AF_ASSIST_MODE -> {
+                requireSize(payload, 1, "AfAssistMode")
+                PupDecodedMessage.RemoteAfAssist(AfAssistMode.fromCode(payload[0].toInt() and 0xFF))
+            }
+            PupOpcodes.RMI_RF_POWER -> {
+                requireSize(payload, 1, "RmiRfPower")
+                PupDecodedMessage.RemoteRfPower(RfPowerLevel.fromCode(payload[0].toInt() and 0xFF))
+            }
+            PupOpcodes.RADIO_MODE_RANGE -> {
+                requireSize(payload, 2, "RadioModeRange")
+                PupDecodedMessage.RfPowerRange(payload[0].toInt(), payload[1].toInt())
+            }
+            PupOpcodes.ZOOM_MODE -> {
+                requireSize(payload, 1, "ZoomMode")
+                PupDecodedMessage.MonolightZoomState(
+                    mode = MonolightZoomMode.fromCode(payload[0].toInt() and 0xFF),
+                    value = null,
+                    range = null,
+                )
+            }
+            PupOpcodes.ZOOM_RANGE -> {
+                requireSize(payload, 4, "ZoomRange")
+                PupDecodedMessage.MonolightZoomState(
+                    mode = MonolightZoomMode.MANUAL,
+                    value = null,
+                    range = readUInt16Le(payload, 0)..readUInt16Le(payload, 2),
+                )
+            }
+            PupOpcodes.ZOOM_VALUE -> {
+                requireSize(payload, 2, "ZoomValue")
+                PupDecodedMessage.MonolightZoomState(
+                    mode = MonolightZoomMode.MANUAL,
+                    value = readUInt16Le(payload, 0),
+                    range = null,
+                )
+            }
+            PupOpcodes.READY_SIGNAL_MODE -> {
+                requireSize(payload, 1, "ReadySignalMode")
+                PupDecodedMessage.ReadySignalState(ReadySignalMode.fromCode(payload[0].toInt() and 0xFF))
+            }
             PupOpcodes.TTL_AUTO_ENABLED -> {
                 requireSize(payload, 1, "TtlAutoEnabled")
                 PupDecodedMessage.TtlAutoState(payload[0].toInt() != 0)
@@ -652,6 +770,14 @@ object PupFrameCodec {
             PupOpcodes.DISPLAY_ORIENTATION -> {
                 requireSize(payload, 1, "DisplayOrientation")
                 PupDecodedMessage.DisplayOrientation(DisplayOrientationMode.fromCode(payload[0].toInt() and 0xFF))
+            }
+            PupOpcodes.CONTROL_SOUNDS_ENABLE -> {
+                requireSize(payload, 1, "ControlSoundsEnable")
+                PupDecodedMessage.ControlSoundsState(payload[0].toInt() != 0)
+            }
+            PupOpcodes.AUTO_STANDBY_TIMEOUT -> {
+                requireSize(payload, 1, "AutoStandbyTimeout")
+                PupDecodedMessage.AutoStandbyMinutes(payload[0].toInt() and 0xFF)
             }
             PupOpcodes.AUTO_OFF_TIMEOUT -> {
                 requireSize(payload, 1, "AutoOffTimeout")
@@ -714,16 +840,16 @@ object PupFrameCodec {
         }
     }
 
-    internal fun readUInt16Le(bytes: ByteArray, offset: Int): Int =
+    fun readUInt16Le(bytes: ByteArray, offset: Int): Int =
         ((bytes[offset].toInt() and 0xFF)) or ((bytes[offset + 1].toInt() and 0xFF) shl 8)
 
-    internal fun readUInt32Le(bytes: ByteArray, offset: Int): Long =
+    fun readUInt32Le(bytes: ByteArray, offset: Int): Long =
         (bytes[offset].toLong() and 0xFFL) or
             ((bytes[offset + 1].toLong() and 0xFFL) shl 8) or
             ((bytes[offset + 2].toLong() and 0xFFL) shl 16) or
             ((bytes[offset + 3].toLong() and 0xFFL) shl 24)
 
-    internal fun readLengthPrefixedUtf8(payload: ByteArray): String {
+    fun readLengthPrefixedUtf8(payload: ByteArray): String {
         if (payload.isEmpty()) return ""
         val declaredLen = payload[0].toInt() and 0xFF
         val available = (payload.size - 1).coerceAtLeast(0)

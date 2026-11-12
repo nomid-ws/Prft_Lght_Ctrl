@@ -118,7 +118,7 @@ class VirtualProfotoPeerLink(
     private var videoLightKelvin: Int = 5200
     private var airChannel: Int = 1
     private var airGroup: AirGroup = if (productId == 36) AirGroup.GROUP_B else AirGroup.GROUP_A
-    private var groupPowers = MutableList(6) { idx -> (80 - idx * 5).coerceIn(10, 100) }
+    private var groupPowers = MutableList(6) { idx -> (80 - idx * 5).coerceIn(1, 100) }
     private var airHeadMask: Int = 0x3F
     private var airModelLightMask: Int = if (productId in 161..166) 0x03 else 0x00
     private var ttlEvCompTenths: Int = 0
@@ -126,8 +126,31 @@ class VirtualProfotoPeerLink(
     private var remoteMode: RemoteOperatingMode = RemoteOperatingMode.AUTO_TTL
     private var airProtocol: AirProtocolMode = AirProtocolMode.AIR_2
 
-    private val activeService: UUID =
-        device.advertisedServiceUuid ?: ProfotoGattProfile.PRIMARY_SIG_SERVICE_UUID
+    // Remote Settings & Group Parity State
+    private var syncMode: Int = 0 // 0=FIRST, 1=SECOND, 2=X_SYNC, 3=AUTO_FP, 4=GLOBAL_SHUTTER
+    private var afAssistMode: Int = 0 // 0=OFF, 1=AUTO, 2=ON
+    private var rfPowerLevel: Int = 4 // 1=P1..4=P4
+    private var autoOffMinutes: Int = 90
+    private var autoStandbyMinutes: Int = 30
+    private var displayBrightness: Int = 3
+    private var batteryType: Int = 0 // 0=Alkaline, 1=NiMH, 2=Li-Ion
+    private var controlSoundsEnabled: Boolean = true
+    private val groupTtlBiases = mutableMapOf(
+        AirGroup.GROUP_A to 0,
+        AirGroup.GROUP_B to 0,
+        AirGroup.GROUP_C to 0,
+    )
+    // Monolight Zoom & Ready Signal State
+    private var zoomMode: Int = 0 // 0=MANUAL, 1=AUTO
+    private var zoomValue: Int = 50 // 0..100
+    private var readySignalMode: Int = 3 // 0=OFF, 1=SOUND, 2=DIM, 3=SOUND_AND_DIM
+
+    private val activeService: UUID = when {
+        // Real Connect Pro (IDs 161..166) advertises 0xFDBB in ServiceData, while its GATT table
+        // hosts PUP TX/RX + Auth Client ID exclusively inside bbd75314-ddaa-4b61-a7df-c6eedb79c152.
+        productId in 161..166 -> ProfotoGattProfile.AUTH_SERVICE_UUID
+        else -> device.advertisedServiceUuid ?: ProfotoGattProfile.PRIMARY_SIG_SERVICE_UUID
+    }
 
     override suspend fun connect() {
         scope.launch {
@@ -223,20 +246,22 @@ class VirtualProfotoPeerLink(
     private suspend fun handleHostPupPacket(raw: ByteArray) {
         val (pkt, msg) = PupFrameCodec.decodeMessage(raw)
 
-        // Emit ACK for ackable non-query commands
-        if (!pkt.isQuery && pkt.opcode !in PupOpcodes.NON_ACKABLE_OPCODES) {
-            delay(8)
-            emitPup(PupFrameCodec.encodeAck(txSeq.next(), pkt.counter))
-        }
-
         if (pkt.isQuery) {
             when (pkt.opcode) {
                 PupOpcodes.HARDWARE_ID -> emitPup(
                     PupFrameCodec.encodePacket(txSeq.next(), PupOpcodes.HARDWARE_ID, byteArrayOf(productId.toByte()))
                 )
-                PupOpcodes.ALL_SETTINGS_V2 -> emitAllSettingsDump()
+                PupOpcodes.ALL_SETTINGS_V2, PupOpcodes.GET_ALL_SETTINGS -> emitAllSettingsDump()
             }
             return
+        }
+
+        applyStateMutation(msg)
+
+        // Emit ACK for ackable non-query commands
+        if (!pkt.isQuery && pkt.opcode !in PupOpcodes.NON_ACKABLE_OPCODES) {
+            delay(8)
+            emitPup(PupFrameCodec.encodeAck(txSeq.next(), pkt.counter))
         }
 
         when (pkt.opcode) {
@@ -270,7 +295,6 @@ class VirtualProfotoPeerLink(
                 // Normal discharge event (rawState = 0xFF -> normal)
                 emitPup(PupFrameCodec.encodePacket(txSeq.next(), PupOpcodes.FLASH_FIRED_EVT, byteArrayOf(0xFF.toByte(), 0x00)))
             }
-            else -> applyStateMutation(msg)
         }
     }
 
@@ -293,21 +317,67 @@ class VirtualProfotoPeerLink(
             is PupDecodedMessage.AirGroupAdjustment -> {
                 if (msg.group == AirGroup.ALL) {
                     for (i in 0 until 6) {
-                        groupPowers[i] = (groupPowers[i] + msg.deltaOrTargetTenthStops).coerceIn(10, 100)
+                        groupPowers[i] = (groupPowers[i] + msg.deltaOrTargetTenthStops).coerceIn(1, 100)
                     }
                 } else {
                     val idx = msg.group.bitIndex.coerceIn(0, 5)
-                    groupPowers[idx] = (groupPowers[idx] + msg.deltaOrTargetTenthStops).coerceIn(10, 100)
+                    groupPowers[idx] = (groupPowers[idx] + msg.deltaOrTargetTenthStops).coerceIn(1, 100)
                 }
                 emitGroupFeedback()
             }
             is PupDecodedMessage.AirHeadMask -> airHeadMask = msg.mask
             is PupDecodedMessage.AirModelLightMask -> airModelLightMask = msg.mask
-            is PupDecodedMessage.AirGroupTtlBias -> ttlEvCompTenths = msg.tenthStops
-            is PupDecodedMessage.AirTtlEvCompensation -> ttlEvCompTenths = msg.tenthStops
+            is PupDecodedMessage.AirGroupTtlBias -> {
+                groupTtlBiases[msg.group] = msg.tenthStops
+                if (msg.group == AirGroup.GROUP_A || msg.group == AirGroup.ALL) {
+                    ttlEvCompTenths = msg.tenthStops
+                }
+                if (msg.group == AirGroup.ALL) {
+                    groupTtlBiases[AirGroup.GROUP_A] = msg.tenthStops
+                    groupTtlBiases[AirGroup.GROUP_B] = msg.tenthStops
+                    groupTtlBiases[AirGroup.GROUP_C] = msg.tenthStops
+                }
+            }
+            is PupDecodedMessage.AirTtlEvCompensation -> {
+                ttlEvCompTenths = msg.tenthStops
+                groupTtlBiases[AirGroup.GROUP_A] = msg.tenthStops
+            }
+            is PupDecodedMessage.RemoteSyncMode -> syncMode = msg.mode.code
+            is PupDecodedMessage.RemoteAfAssist -> afAssistMode = msg.mode.code
+            is PupDecodedMessage.RemoteRfPower -> rfPowerLevel = msg.level.code
+            is PupDecodedMessage.MonolightZoomState -> {
+                if (msg.value != null) {
+                    zoomValue = msg.value!!
+                } else if (msg.range != null) {
+                    // range is read-only capability
+                } else {
+                    zoomMode = msg.mode.code
+                }
+            }
+            is PupDecodedMessage.ReadySignalState -> readySignalMode = msg.mode.code
+            is PupDecodedMessage.AutoOffMinutes -> autoOffMinutes = msg.minutes
+            is PupDecodedMessage.AutoStandbyMinutes -> autoStandbyMinutes = msg.minutes
+            is PupDecodedMessage.ControlSoundsState -> controlSoundsEnabled = msg.enabled
+            is PupDecodedMessage.DisplayBrightness -> displayBrightness = msg.level.code
+            is PupDecodedMessage.BatteryTypeSetting -> batteryType = msg.chemistry.code
             is PupDecodedMessage.StrobeFlashMode -> flashMode = msg.mode
             is PupDecodedMessage.RemoteModeState -> remoteMode = msg.mode
             is PupDecodedMessage.AirProtocol -> airProtocol = msg.mode
+            is PupDecodedMessage.RawUnknown -> {
+                when (msg.opcode) {
+                    PupOpcodes.SYNC_MODE -> if (msg.bytes.isNotEmpty()) syncMode = msg.bytes[0].toInt() and 0xFF
+                    PupOpcodes.AF_ASSIST_MODE -> if (msg.bytes.isNotEmpty()) afAssistMode = msg.bytes[0].toInt() and 0xFF
+                    PupOpcodes.RMI_RF_POWER -> if (msg.bytes.isNotEmpty()) rfPowerLevel = msg.bytes[0].toInt() and 0xFF
+                    PupOpcodes.AUTO_STANDBY_TIMEOUT -> if (msg.bytes.isNotEmpty()) autoStandbyMinutes = msg.bytes[0].toInt() and 0xFF
+                    PupOpcodes.AUTO_OFF_TIMEOUT -> if (msg.bytes.isNotEmpty()) autoOffMinutes = msg.bytes[0].toInt() and 0xFF
+                    PupOpcodes.CONTROL_SOUNDS_ENABLE -> if (msg.bytes.isNotEmpty()) controlSoundsEnabled = msg.bytes[0].toInt() != 0
+                    PupOpcodes.ZOOM_MODE -> if (msg.bytes.isNotEmpty()) zoomMode = msg.bytes[0].toInt() and 0xFF
+                    PupOpcodes.ZOOM_VALUE -> if (msg.bytes.size >= 2) zoomValue = PupFrameCodec.readUInt16Le(msg.bytes, 0)
+                    PupOpcodes.READY_SIGNAL_MODE -> if (msg.bytes.isNotEmpty()) readySignalMode = msg.bytes[0].toInt() and 0xFF
+                    PupOpcodes.BATTERY_TYPE -> if (msg.bytes.isNotEmpty()) batteryType = msg.bytes[0].toInt() and 0xFF
+                    PupOpcodes.DISPLAY_BRIGHTNESS -> if (msg.bytes.isNotEmpty()) displayBrightness = msg.bytes[0].toInt() and 0xFF
+                }
+            }
             else -> Unit
         }
     }
@@ -325,7 +395,18 @@ class VirtualProfotoPeerLink(
             productId in 161..166 -> {
                 records += PupOpcodes.AIR_PROTOCOL_MODE to byteArrayOf(airProtocol.code.toByte())
                 records += PupOpcodes.REMOTE_MODE to byteArrayOf(remoteMode.code.toByte())
-                records += PupOpcodes.AIR_PX_BIAS to byteArrayOf(ttlEvCompTenths.toByte(), AirGroup.ALL.code.toByte())
+                records += PupOpcodes.SYNC_MODE to byteArrayOf(syncMode.toByte())
+                records += PupOpcodes.AF_ASSIST_MODE to byteArrayOf(afAssistMode.toByte())
+                records += PupOpcodes.RMI_RF_POWER to byteArrayOf(rfPowerLevel.toByte())
+                records += PupOpcodes.RADIO_MODE_RANGE to byteArrayOf(1, 4)
+                records += PupOpcodes.AUTO_OFF_TIMEOUT to byteArrayOf(autoOffMinutes.toByte())
+                records += PupOpcodes.AUTO_STANDBY_TIMEOUT to byteArrayOf(autoStandbyMinutes.toByte())
+                records += PupOpcodes.DISPLAY_BRIGHTNESS to byteArrayOf(displayBrightness.toByte())
+                records += PupOpcodes.BATTERY_TYPE to byteArrayOf(batteryType.toByte())
+                records += PupOpcodes.CONTROL_SOUNDS_ENABLE to byteArrayOf(if (controlSoundsEnabled) 1 else 0)
+                records += PupOpcodes.AIR_PX_BIAS to byteArrayOf(groupTtlBiases[AirGroup.GROUP_A]?.toByte() ?: 0, AirGroup.GROUP_A.code.toByte())
+                records += PupOpcodes.AIR_PX_BIAS to byteArrayOf(groupTtlBiases[AirGroup.GROUP_B]?.toByte() ?: 0, AirGroup.GROUP_B.code.toByte())
+                records += PupOpcodes.AIR_PX_BIAS to byteArrayOf(groupTtlBiases[AirGroup.GROUP_C]?.toByte() ?: 0, AirGroup.GROUP_C.code.toByte())
                 records += PupOpcodes.AIR_TTL_EV_COMP to byteArrayOf(ttlEvCompTenths.toByte())
                 records += PupOpcodes.AIR_HEAD_ON to byteArrayOf((airHeadMask and 0xFF).toByte(), 0x00)
                 records += PupOpcodes.AIR_MODEL_LIGHT_ON to byteArrayOf((airModelLightMask and 0xFF).toByte(), 0x00)
@@ -344,6 +425,8 @@ class VirtualProfotoPeerLink(
                 val rangeBuf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putShort(10).putShort(1000).array()
                 val cctBuf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(videoLightKelvin.toShort()).array()
                 val cctRange = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putShort(3000).putShort(6500).array()
+                val zoomRangeBuf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putShort(0).putShort(100).array()
+                val zoomValBuf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(zoomValue.toShort()).array()
 
                 records += PupOpcodes.AIR_GROUP to byteArrayOf(airGroup.code.toByte())
                 records += PupOpcodes.MX_ENERGY to byteArrayOf(flashPowerTenthStops.toByte())
@@ -356,6 +439,10 @@ class VirtualProfotoPeerLink(
                 records += PupOpcodes.VIDEO_LIGHT_INTENSITY_RANGE to rangeBuf
                 records += PupOpcodes.VIDEO_LIGHT_COLOR_TEMPERATURE to cctBuf
                 records += PupOpcodes.VIDEO_LIGHT_COLOR_RANGE to cctRange
+                records += PupOpcodes.ZOOM_MODE to byteArrayOf(zoomMode.toByte())
+                records += PupOpcodes.ZOOM_RANGE to zoomRangeBuf
+                records += PupOpcodes.ZOOM_VALUE to zoomValBuf
+                records += PupOpcodes.READY_SIGNAL_MODE to byteArrayOf(readySignalMode.toByte())
             }
         }
 
