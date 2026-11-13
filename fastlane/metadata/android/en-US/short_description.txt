@@ -1,1 +1,1 @@
-BLE studio controller for Profoto B10X, A2, Connect Pro & Connect
+Offline, account-free BLE controller for Profoto AirX & AirTTL lights
