@@ -93,6 +93,8 @@ class StudioViewModel @Inject constructor(
         orchestrator.setAutoReconnectPinnedEnabled(enabled)
     fun setDualPowerReadoutEnabled(enabled: Boolean) =
         orchestrator.setDualPowerReadoutEnabled(enabled)
+    fun setBroadBleScanEnabled(enabled: Boolean) =
+        orchestrator.setBroadBleScanEnabled(enabled)
 
     // Remote Settings
     fun setRemoteSyncMode(address: String, mode: SyncTriggerMode) =

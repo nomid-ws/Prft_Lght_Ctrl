@@ -79,6 +79,15 @@ class AndroidBleAdapterGateway @Inject constructor(
     private val _isScanning = MutableStateFlow(false)
     override val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
+    private val _scanError = MutableStateFlow<String?>(null)
+    override val scanError: StateFlow<String?> = _scanError.asStateFlow()
+
+    @Volatile
+    private var broadScanMode: Boolean = false
+
+    @Volatile
+    private var didAttemptAsyncFallback: Boolean = false
+
     private val deviceMap = LinkedHashMap<String, DiscoveredProfotoDevice>()
     private val seenNonProfotoDiagnosticLog = HashSet<String>()
 
@@ -86,9 +95,13 @@ class AndroidBleAdapterGateway @Inject constructor(
         override fun onReceive(ctx: Context?, intent: Intent?) {
             if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
                 val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
-                _isBluetoothEnabled.value = (state == BluetoothAdapter.STATE_ON)
-                if (state != BluetoothAdapter.STATE_ON) {
+                val enabled = (state == BluetoothAdapter.STATE_ON)
+                _isBluetoothEnabled.value = enabled
+                if (!enabled) {
                     _isScanning.value = false
+                } else {
+                    _scanError.value = null
+                    hydrateSystemConnectedAndBondedProfotoDevices()
                 }
             }
         }
@@ -187,13 +200,60 @@ class AndroidBleAdapterGateway @Inject constructor(
         }
 
         override fun onScanFailed(errorCode: Int) {
-            Log.e(TAG, "BLE Scan failed with code: $errorCode")
+            if (errorCode == ScanCallback.SCAN_FAILED_ALREADY_STARTED) {
+                Log.w(TAG, "BLE scan already started (code 1); keeping active state")
+                _isScanning.value = true
+                return
+            }
+            Log.e(TAG, "BLE Scan failed with code: $errorCode (broad=$broadScanMode, fallbackTried=$didAttemptAsyncFallback)")
+            if (!didAttemptAsyncFallback && errorCode != ScanCallback.SCAN_FAILED_SCANNING_TOO_FREQUENTLY) {
+                didAttemptAsyncFallback = true
+                val cb: ScanCallback = this
+                scope.launch {
+                    val fallbackScanner = adapter?.takeIf { it.isEnabled }?.bluetoothLeScanner
+                    if (fallbackScanner == null) {
+                        _isScanning.value = false
+                        _scanError.value = describeScanFailure(errorCode)
+                        return@launch
+                    }
+                    runCatching { fallbackScanner.stopScan(cb) }
+                    try {
+                        val fallbackFilters = if (broadScanMode) buildProfotoScanFilters() else null
+                        val fallbackSettings = ScanSettings.Builder()
+                            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                            .setReportDelay(0L)
+                            .build()
+                        fallbackScanner.startScan(fallbackFilters, fallbackSettings, cb)
+                        _isScanning.value = true
+                        Log.i(TAG, "Recovered BLE scan via fallback mode after code $errorCode")
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Fallback BLE scan failed: ${t.message}")
+                        _isScanning.value = false
+                        _scanError.value = describeScanFailure(errorCode)
+                    }
+                }
+                return
+            }
             _isScanning.value = false
+            _scanError.value = describeScanFailure(errorCode)
         }
     }
 
     override fun refreshAdapterState() {
         _isBluetoothEnabled.value = adapter?.isEnabled == true
+    }
+
+    override fun clearScanError() {
+        _scanError.value = null
+    }
+
+    override fun setBroadScanMode(enabled: Boolean) {
+        if (broadScanMode == enabled) return
+        broadScanMode = enabled
+        if (_isScanning.value) {
+            stopScan()
+            startScan()
+        }
     }
 
     override fun startScan() {
@@ -205,37 +265,39 @@ class AndroidBleAdapterGateway @Inject constructor(
         hydrateSystemConnectedAndBondedProfotoDevices()
         if (_isScanning.value) return
 
-        val extendedSettings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .setReportDelay(0L)
-            .setLegacy(false)
-            .setPhy(ScanSettings.PHY_LE_ALL_SUPPORTED)
-            .build()
+        _scanError.value = null
+        didAttemptAsyncFallback = false
+        seenNonProfotoDiagnosticLog.clear()
 
         try {
-            // Unfiltered foreground scan across both Legacy BLE 4.x and Bluetooth 5 Extended/Coded PHY
-            // so Android BLE controllers never drop 128-bit Service Data or Air Range Coded PHY packets.
-            seenNonProfotoDiagnosticLog.clear()
-            try {
-                scanner.startScan(null as List<ScanFilter>?, extendedSettings, scanCallback)
-            } catch (extErr: Throwable) {
-                Log.w(TAG, "Extended PHY scan unsupported (${extErr.message}); falling back to 1M scan")
-                val fallbackSettings = ScanSettings.Builder()
-                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                    .setReportDelay(0L)
-                    .build()
-                scanner.startScan(null as List<ScanFilter>?, fallbackSettings, scanCallback)
+            if (broadScanMode) {
+                val broadSettings = buildBroadCompatScanSettings()
+                try {
+                    scanner.startScan(null as List<ScanFilter>?, broadSettings, scanCallback)
+                } catch (extErr: Throwable) {
+                    Log.w(TAG, "Broad 1M scan rejected (${extErr.message}); falling back to standard filtered 1M scan")
+                    scanner.startScan(buildProfotoScanFilters(), buildStandardScanSettings(), scanCallback)
+                }
+                Log.i(TAG, "Started Broad 1M Profoto BLE scan (unfiltered 1M legacy+ext)")
+            } else {
+                // Default: Hardware-filtered 1M Legacy-compatible scan matching Profoto Control (d8/s.java).
+                // Satisfies Samsung One UI neverForLocation filter rules and avoids Coded PHY radio starvation.
+                val filters = buildProfotoScanFilters()
+                val settings = buildStandardScanSettings()
+                scanner.startScan(filters, settings, scanCallback)
+                Log.i(TAG, "Started Filtered 1M Profoto BLE scan (${filters.size} UUID/ServiceData filters)")
             }
             _isScanning.value = true
-            Log.i(TAG, "Started unfiltered Profoto BLE scan (1M + Coded PHY, 0xFDBB + 1d944db4)")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to start BLE scan: ${t.message}")
             _isScanning.value = false
+            _scanError.value = "BLE scan could not start: ${t.message ?: "Bluetooth error"}"
         }
     }
 
     private fun hydrateSystemConnectedAndBondedProfotoDevices() {
         scope.launch {
+            val managedUuids = ProfotoGattProfile.getAllManagedServiceUuids()
             val candidates = LinkedHashMap<String, BluetoothDevice>()
             runCatching {
                 bluetoothManager?.getConnectedDevices(BluetoothProfile.GATT)?.forEach { d ->
@@ -253,17 +315,20 @@ class AndroidBleAdapterGateway @Inject constructor(
             for ((addr, dev) in candidates) {
                 if (deviceMap.containsKey(addr)) continue
                 val name = runCatching { dev.name.orEmpty().trim() }.getOrDefault("")
-                if (!looksLikeProfotoName(name)) continue
+                val matchedKnownUuid = runCatching {
+                    dev.uuids?.firstOrNull { it.uuid in managedUuids }?.uuid
+                }.getOrNull()
+                if (!looksLikeProfotoName(name) && matchedKnownUuid == null) continue
                 deviceMap[addr] = DiscoveredProfotoDevice(
                     address = addr,
-                    advertisedName = name,
+                    advertisedName = name.ifBlank { "Profoto (${addr.takeLast(5)})" },
                     rssi = -55,
-                    advertisedServiceUuid = null,
+                    advertisedServiceUuid = matchedKnownUuid,
                     advertisedProductId = 0,
                     isSimulated = false,
                     lastSeenEpochMs = System.currentTimeMillis(),
                 )
-                Log.i(TAG, "Hydrated OS-known Profoto BLE device: addr=$addr name='$name'")
+                Log.i(TAG, "Hydrated OS-known Profoto BLE device: addr=$addr name='$name' uuid=$matchedKnownUuid")
                 changed = true
             }
             if (changed) {
@@ -380,6 +445,67 @@ class AndroidBleAdapterGateway @Inject constructor(
             deviceMap.putAll(realOnly)
             simulated.forEach { deviceMap[it.address] = it }
             _scannedDevices.update { deviceMap.values.sortedByDescending { d -> d.rssi } }
+        }
+    }
+
+    companion object {
+        /**
+         * Explicit BLE ScanFilters covering all Profoto advertisement formats:
+         * - 16-bit Service Data 0xFDBB (A2, A10, B10X, Pro-D3, Connect Pro, modern Connect)
+         * - 16-bit Service UUID 0xFDBB
+         * - 128-bit Legacy Service Data & UUID 1d944db4-58a0-4177-84da-e29bf5c4630d (early Connect, B10, C1)
+         * - 128-bit AirX Auth Service UUID bbd75314-ddaa-4b61-a7df-c6eedb79c152
+         *
+         * Supplying explicit ServiceData/ServiceUuid filters exempts the scan from Samsung One UI
+         * unfiltered scan suppression when BLUETOOTH_SCAN uses neverForLocation.
+         */
+        fun buildProfotoScanFilters(): List<ScanFilter> {
+            val fdbb = ParcelUuid(ProfotoGattProfile.PRIMARY_SIG_SERVICE_UUID)
+            val legacy = ParcelUuid(ProfotoGattProfile.LEGACY_BASE_SERVICE_UUID)
+            val auth = ParcelUuid(ProfotoGattProfile.AUTH_SERVICE_UUID)
+            val emptyBytes = ByteArray(0)
+            return listOf(
+                ScanFilter.Builder().setServiceData(fdbb, emptyBytes, emptyBytes).build(),
+                ScanFilter.Builder().setServiceUuid(fdbb).build(),
+                ScanFilter.Builder().setServiceData(legacy, emptyBytes, emptyBytes).build(),
+                ScanFilter.Builder().setServiceUuid(legacy).build(),
+                ScanFilter.Builder().setServiceUuid(auth).build(),
+            )
+        }
+
+        fun buildStandardScanSettings(): ScanSettings =
+            ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+                .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+                .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)
+                .setReportDelay(0L)
+                .build()
+
+        fun buildBroadCompatScanSettings(): ScanSettings =
+            ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+                .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+                .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)
+                .setReportDelay(0L)
+                .setLegacy(false)
+                .setPhy(BluetoothDevice.PHY_LE_1M)
+                .build()
+
+        fun describeScanFailure(errorCode: Int): String = when (errorCode) {
+            ScanCallback.SCAN_FAILED_APPLICATION_REGISTRATION_FAILED ->
+                "BLE scanner registration failed (code 2) — toggle phone Bluetooth Off/On and retry"
+            ScanCallback.SCAN_FAILED_INTERNAL_ERROR ->
+                "Bluetooth stack internal scan error (code 3) — toggle phone Bluetooth Off/On and retry"
+            ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED ->
+                "BLE scan mode unsupported on this device (code 4)"
+            5 -> // SCAN_FAILED_OUT_OF_HARDWARE_RESOURCES
+                "Bluetooth hardware scan slots full (code 5) — close other BLE apps and retry"
+            ScanCallback.SCAN_FAILED_SCANNING_TOO_FREQUENTLY ->
+                "Android paused rapid BLE scan restarts — wait 10s and tap Scan Profoto BLE"
+            else ->
+                "BLE scan failed (code $errorCode) — verify Bluetooth is enabled and retry"
         }
     }
 }

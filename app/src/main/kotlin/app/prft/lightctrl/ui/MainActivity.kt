@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -19,6 +20,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.prft.lightctrl.BuildConfig
 import app.prft.lightctrl.domain.StudioPreferencesStore
@@ -58,7 +61,23 @@ class MainActivity : ComponentActivity() {
             PrftStudioTheme {
                 val dashboardState by viewModel.state.collectAsStateWithLifecycle()
 
+                val lifecycleOwner = LocalLifecycleOwner.current
                 var hasPermissions by remember { mutableStateOf(hasRequiredBlePermissions()) }
+
+                DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME) {
+                            val nowGranted = hasRequiredBlePermissions()
+                            hasPermissions = nowGranted
+                            viewModel.refreshBluetooth()
+                            if (nowGranted && dashboardState.connectedUnits.isEmpty()) {
+                                viewModel.startScan()
+                            }
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
 
                 val permissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -70,12 +89,12 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(hasPermissions) {
+                LaunchedEffect(hasPermissions, dashboardState.isBluetoothEnabled) {
                     if (!BuildConfig.DEBUG) {
                         viewModel.setBenchSimulator(false)
                     }
                     viewModel.refreshBluetooth()
-                    if (hasPermissions) {
+                    if (hasPermissions && dashboardState.isBluetoothEnabled) {
                         viewModel.startScan()
                     }
                 }

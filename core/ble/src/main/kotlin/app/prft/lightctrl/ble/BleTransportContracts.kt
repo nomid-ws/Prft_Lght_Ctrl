@@ -1,8 +1,11 @@
 package app.prft.lightctrl.ble
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.UUID
+
+private val NO_SCAN_ERROR: StateFlow<String?> = MutableStateFlow(null)
 
 data class DiscoveredProfotoDevice(
     val address: String,
@@ -68,9 +71,13 @@ interface BleAdapterGateway {
     val isBluetoothEnabled: StateFlow<Boolean>
     val scannedDevices: StateFlow<List<DiscoveredProfotoDevice>>
     val isScanning: StateFlow<Boolean>
+    val scanError: StateFlow<String?>
+        get() = NO_SCAN_ERROR
 
     fun refreshAdapterState()
     fun startScan()
     fun stopScan()
+    fun setBroadScanMode(enabled: Boolean) {}
+    fun clearScanError() {}
     fun openPeerLink(device: DiscoveredProfotoDevice): BlePeerLink
 }

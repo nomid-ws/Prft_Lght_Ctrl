@@ -463,4 +463,66 @@ class StudioOrchestratorTest {
         assertNotNull(banner)
         assertTrue(banner!!.contains("Bench Simulator is disabled in release builds"))
     }
+
+    @Test
+    fun `filtered 1M scan is default and BLE scan errors surface in statusBanner`() = runBlocking {
+        val scanErrorFlow = MutableStateFlow<String?>(null)
+        var observedBroadMode = false
+        val gw = object : BleAdapterGateway {
+            override val isBluetoothAvailable: Boolean = true
+            override val isBluetoothEnabled: StateFlow<Boolean> = MutableStateFlow(true)
+            override val scannedDevices: StateFlow<List<DiscoveredProfotoDevice>> = MutableStateFlow(emptyList())
+            override val isScanning: StateFlow<Boolean> = MutableStateFlow(false)
+            override val scanError: StateFlow<String?> = scanErrorFlow
+            override fun refreshAdapterState() = Unit
+            override fun startScan() = Unit
+            override fun stopScan() = Unit
+            override fun setBroadScanMode(enabled: Boolean) {
+                observedBroadMode = enabled
+            }
+            override fun clearScanError() {
+                scanErrorFlow.value = null
+            }
+            override fun openPeerLink(device: DiscoveredProfotoDevice): BlePeerLink =
+                VirtualBenchFixtures.createPeerLink(device, fastTimings = true)
+        }
+
+        val orchestrator = StudioOrchestrator(
+            appContext = null,
+            bleGateway = gw,
+            groupPacingMs = 5L,
+        )
+
+        assertFalse(orchestrator.dashboardState.value.isBroadBleScanEnabled)
+        assertFalse(observedBroadMode)
+
+        orchestrator.setBroadBleScanEnabled(true)
+        var attempts = 0
+        while ((!orchestrator.dashboardState.value.isBroadBleScanEnabled || !observedBroadMode) && attempts < 30) {
+            delay(15)
+            attempts++
+        }
+        assertTrue(orchestrator.dashboardState.value.isBroadBleScanEnabled)
+        assertTrue(observedBroadMode)
+
+        scanErrorFlow.value = "Android paused rapid BLE scan restarts — wait 10s and tap Scan Profoto BLE"
+        attempts = 0
+        while (orchestrator.dashboardState.value.statusBanner == null && attempts < 30) {
+            delay(15)
+            attempts++
+        }
+        assertEquals(
+            "Android paused rapid BLE scan restarts — wait 10s and tap Scan Profoto BLE",
+            orchestrator.dashboardState.value.statusBanner,
+        )
+
+        orchestrator.clearStatusBanner()
+        attempts = 0
+        while (orchestrator.dashboardState.value.statusBanner != null && attempts < 30) {
+            delay(15)
+            attempts++
+        }
+        assertEquals(null, orchestrator.dashboardState.value.statusBanner)
+        assertEquals(null, scanErrorFlow.value)
+    }
 }

@@ -55,6 +55,9 @@ class StudioPreferencesStore(
     private val _dualPowerReadout = MutableStateFlow(false)
     val isDualPowerReadoutEnabled: StateFlow<Boolean> = _dualPowerReadout.asStateFlow()
 
+    private val _broadBleScan = MutableStateFlow(false)
+    val isBroadBleScanEnabled: StateFlow<Boolean> = _broadBleScan.asStateFlow()
+
     private val _savedScenes = MutableStateFlow<List<StudioScene>>(emptyList())
     val savedScenes: StateFlow<List<StudioScene>> = _savedScenes.asStateFlow()
 
@@ -78,6 +81,7 @@ class StudioPreferencesStore(
                     _volumeKeyTestFlash.value = prefs[KEY_VOLUME_KEY_FLASH] ?: false
                     _autoReconnectPinned.value = prefs[KEY_AUTO_RECONNECT] ?: true
                     _dualPowerReadout.value = prefs[KEY_DUAL_POWER] ?: false
+                    _broadBleScan.value = prefs[KEY_BROAD_BLE_SCAN] ?: false
 
                     val rawScenes = prefs[KEY_SAVED_SCENES]
                     if (!rawScenes.isNullOrBlank()) {
@@ -151,6 +155,16 @@ class StudioPreferencesStore(
         }
     }
 
+    fun isBroadBleScanEnabled(): Flow<Boolean> = isBroadBleScanEnabled
+
+    suspend fun setBroadBleScanEnabled(enabled: Boolean) {
+        _broadBleScan.value = enabled
+        val ctx = context ?: return
+        ctx.studioPreferencesDataStore.edit { prefs ->
+            prefs[KEY_BROAD_BLE_SCAN] = enabled
+        }
+    }
+
     fun getSavedScenes(): Flow<List<StudioScene>> = savedScenes
 
     suspend fun saveScene(scene: StudioScene) {
@@ -191,6 +205,7 @@ class StudioPreferencesStore(
         private val KEY_VOLUME_KEY_FLASH = booleanPreferencesKey("toggle_volume_key_flash")
         private val KEY_AUTO_RECONNECT = booleanPreferencesKey("toggle_auto_reconnect_pinned")
         private val KEY_DUAL_POWER = booleanPreferencesKey("toggle_dual_power_readout")
+        private val KEY_BROAD_BLE_SCAN = booleanPreferencesKey("toggle_broad_ble_scan")
         private val KEY_SAVED_SCENES = stringPreferencesKey("saved_scenes_json")
 
         fun normalizeMac(address: String): String =

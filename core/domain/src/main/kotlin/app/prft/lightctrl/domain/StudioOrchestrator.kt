@@ -114,6 +114,7 @@ class StudioOrchestrator(
         val isVolumeKeyTestFlashEnabled: Boolean,
         val isAutoReconnectPinnedEnabled: Boolean,
         val isDualPowerReadoutEnabled: Boolean,
+        val isBroadBleScanEnabled: Boolean,
     )
 
     private data class AuxUiState(
@@ -170,6 +171,19 @@ class StudioOrchestrator(
                 }
             }
         }
+        scope.launch {
+            preferencesStore.isBroadBleScanEnabled.collect { enabled ->
+                bleGateway.setBroadScanMode(enabled)
+            }
+        }
+
+        scope.launch {
+            bleGateway.scanError.collect { err ->
+                if (!err.isNullOrBlank()) {
+                    statusBanner.value = err
+                }
+            }
+        }
     }
 
     private val prefsSnapshotFlow: Flow<PrefsSnapshot> = combine(
@@ -177,9 +191,12 @@ class StudioOrchestrator(
         preferencesStore.pinnedKitMacs,
         preferencesStore.isVolumeKeyTestFlashEnabled,
         preferencesStore.isAutoReconnectPinnedEnabled,
-        preferencesStore.isDualPowerReadoutEnabled,
-    ) { roles, pinned, volume, autoRec, dualPower ->
-        PrefsSnapshot(roles, pinned, volume, autoRec, dualPower)
+        combine(
+            preferencesStore.isDualPowerReadoutEnabled,
+            preferencesStore.isBroadBleScanEnabled,
+        ) { dualPower, broadScan -> Pair(dualPower, broadScan) },
+    ) { roles, pinned, volume, autoRec, (dualPower, broadScan) ->
+        PrefsSnapshot(roles, pinned, volume, autoRec, dualPower, broadScan)
     }
 
     val dashboardState: StateFlow<StudioDashboardState> = combine(
@@ -214,6 +231,7 @@ class StudioOrchestrator(
             isVolumeKeyTestFlashEnabled = aux.prefs.isVolumeKeyTestFlashEnabled,
             isAutoReconnectPinnedEnabled = aux.prefs.isAutoReconnectPinnedEnabled,
             isDualPowerReadoutEnabled = aux.prefs.isDualPowerReadoutEnabled,
+            isBroadBleScanEnabled = aux.prefs.isBroadBleScanEnabled,
             scannedDevices = scanned,
             connectedUnits = units,
             groupChannels = buildGroupChannelStates(units, aux.fallbackLevels, aux.prefs.groupRoles),
@@ -236,6 +254,7 @@ class StudioOrchestrator(
     fun startScan() {
         manuallyDisconnectedMacs.clear()
         statusBanner.value = null
+        bleGateway.clearScanError()
         bleGateway.startScan()
     }
 
@@ -249,6 +268,7 @@ class StudioOrchestrator(
 
     fun clearStatusBanner() {
         statusBanner.value = null
+        bleGateway.clearScanError()
     }
 
     /**
@@ -910,6 +930,10 @@ class StudioOrchestrator(
 
     fun setDualPowerReadoutEnabled(enabled: Boolean) {
         scope.launch { preferencesStore.setDualPowerReadoutEnabled(enabled) }
+    }
+
+    fun setBroadBleScanEnabled(enabled: Boolean) {
+        scope.launch { preferencesStore.setBroadBleScanEnabled(enabled) }
     }
 
     val savedScenes: StateFlow<List<StudioScene>> = preferencesStore.savedScenes

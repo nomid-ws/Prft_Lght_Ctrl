@@ -285,4 +285,13 @@ class ProfotoBleParityTest {
 
         fsm.disconnect()
     }
+
+    @Test
+    fun `BLE scan failure descriptions map Android ScanCallback error codes cleanly`() {
+        assertTrue(AndroidBleAdapterGateway.describeScanFailure(2).contains("code 2"))
+        assertTrue(AndroidBleAdapterGateway.describeScanFailure(3).contains("code 3"))
+        assertTrue(AndroidBleAdapterGateway.describeScanFailure(4).contains("code 4"))
+        assertTrue(AndroidBleAdapterGateway.describeScanFailure(5).contains("code 5"))
+        assertTrue(AndroidBleAdapterGateway.describeScanFailure(6).contains("wait 10s"))
+    }
 }

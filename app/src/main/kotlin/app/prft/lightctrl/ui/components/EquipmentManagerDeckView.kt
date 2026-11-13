@@ -1,5 +1,7 @@
 package app.prft.lightctrl.ui.components
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -88,6 +91,7 @@ fun EquipmentManagerDeckView(
     onOpenAbout: () -> Unit,
     viewModel: StudioViewModel,
 ) {
+    val context = LocalContext.current
     val connectedAddresses = state.connectedUnits.map { it.address }.toSet()
     val nearbyUnconnected = state.scannedDevices.filter { it.address !in connectedAddresses }
 
@@ -117,6 +121,40 @@ fun EquipmentManagerDeckView(
                             modifier = Modifier.heightIn(min = 48.dp),
                         ) {
                             Text("Grant Nearby Devices Permission")
+                        }
+                    }
+                }
+            }
+        } else if (state.isBluetoothAvailable && !state.isBluetoothEnabled) {
+            item(key = "bt_disabled_card") {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = StudioColors.CardSurface),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text("Bluetooth Is Turned Off", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Turn on Bluetooth on your phone to discover Profoto A2, B10X, Connect, and Connect Pro units.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = StudioColors.TextSecondary,
+                        )
+                        FilledTonalButton(
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                    )
+                                }
+                            },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) {
+                            Text("Open Bluetooth Settings")
                         }
                     }
                 }
@@ -201,7 +239,11 @@ fun EquipmentManagerDeckView(
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(
-                            text = "Tap Scan Profoto BLE below to discover Profoto Connect, Connect Pro, A2, and B10X Pro / B10 units.",
+                            text = if (state.isScanning) {
+                                "Ensure Bluetooth is ON in your light's menu and no other app or phone is actively linked to it."
+                            } else {
+                                "Tap Scan Profoto BLE below to discover Profoto Connect, Connect Pro, A2, and B10X Pro / B10 units."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = StudioColors.TextSecondary,
                         )
@@ -258,6 +300,12 @@ fun EquipmentManagerDeckView(
                         subtitle = "Automatically link pinned Profoto units when discovered in BLE range",
                         checked = state.isAutoReconnectPinnedEnabled,
                         onCheckedChange = viewModel::setAutoReconnectPinnedEnabled,
+                    )
+                    StudioPreferenceToggleRow(
+                        title = "Broad BLE Scan (Unfiltered 1M)",
+                        subtitle = "Fallback mode if custom-firmware units do not appear in standard filtered scan",
+                        checked = state.isBroadBleScanEnabled,
+                        onCheckedChange = viewModel::setBroadBleScanEnabled,
                     )
                 }
             }

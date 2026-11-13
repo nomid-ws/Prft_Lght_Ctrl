@@ -1,0 +1,4 @@
+v1.5.1 — Reliable Android BLE Discovery & Scan Recovery:
+- Fix BLE discovery on Samsung One UI and Android 12+ phones for Profoto A2, B10X, Connect & Connect Pro using hardware-filtered 1M ScanSettings (0xFDBB / 1d944db4, neverForLocation-compliant)
+- Add self-healing ScanCallback.onScanFailed fallback and scan status banners
+- Add Bluetooth-Off prompt card, scan auto-resume on foregrounding, OS GATT UUID hydration, and Broad BLE Scan toggle

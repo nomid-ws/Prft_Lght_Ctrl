@@ -151,6 +151,7 @@ data class StudioDashboardState(
     val isVolumeKeyTestFlashEnabled: Boolean = false,
     val isAutoReconnectPinnedEnabled: Boolean = true,
     val isDualPowerReadoutEnabled: Boolean = false,
+    val isBroadBleScanEnabled: Boolean = false,
     val scannedDevices: List<DiscoveredProfotoDevice> = emptyList(),
     val connectedUnits: List<ConnectedProfotoUnit> = emptyList(),
     val groupChannels: List<StudioGroupChannelState> = listOf(
