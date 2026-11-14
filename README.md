@@ -2,6 +2,8 @@
 
 Privacy-first, 100% offline native Android Bluetooth Low Energy (BLE) studio lighting controller for **Profoto AirX & AirTTL** strobes and remotes. Built in Kotlin and Jetpack Compose for **modern Android (`Android 12–16+`, `API 31+`) phones and tablets** — zero accounts, zero internet access, zero location tracking, and zero bloat.
 
+> **Article & Technical Write-Up:** [**Prft Light Ctrl: Offline Android BLE Control for Profoto AirX Without Cloud Logins**](https://nomid.ws/profoto-ble-light-control/) (`nomid.ws`)
+
 ## Why Prft Light Ctrl? (Pain Points Solved)
 
 - **No Account or Cloud Login Wall:** Opens straight to your studio console. Never get locked out of your lights on location or in a basement studio without cell service because an app update signed you out of a cloud account.
